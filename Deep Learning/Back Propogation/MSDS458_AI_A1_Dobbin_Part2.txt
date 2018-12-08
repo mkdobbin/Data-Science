@@ -1,0 +1,282 @@
+#Assignment 1 Code.
+
+##############################################################################
+#Part 2
+#############################################################################
+#Part 2 of Assignment 1. Using Keras to classify handwritten digits. 
+#Code adapted from Deep learning with Python textbook authored by Francois Chollet
+################################################################################
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+#Load in MNIST dataset in Keras
+from keras.datasets import mnist
+(train_images, train_labels), (test_images, test_labels) = mnist.load_data()
+
+#Understand the size and shape of the dataset.
+#Training dataset 60000 images, 28x28 pixels
+train_images.shape 
+len(train_labels)
+
+#Testing dataset 10000 images, 
+test_images.shape
+len(test_labels)
+
+# plot the first 4 images as gray scale
+# Code adapater from https://machinelearningmastery.com/
+#handwritten-digit-recognition-using-convolutional-neural-networks-python-keras/
+plt.subplot(221)
+plt.imshow(train_images[0], cmap=plt.get_cmap('gray'))
+plt.subplot(222)
+plt.imshow(train_images[1], cmap=plt.get_cmap('gray'))
+plt.subplot(223)
+plt.imshow(train_images[2], cmap=plt.get_cmap('gray'))
+plt.subplot(224)
+plt.imshow(train_images[3], cmap=plt.get_cmap('gray'))
+# show the plot
+plt.show()
+
+#Prepare images for neural network. Scale values between 0 and 1 and change
+#input shape into 60000 images with 28*28 input nodes 
+train_images = train_images.reshape((60000, 28 * 28))
+train_images = train_images.astype('float32') / 255
+test_images = test_images.reshape((10000, 28 * 28))
+test_images = test_images.astype('float32') / 255
+
+#Categorically encode the labels.
+from keras.utils import to_categorical
+train_labels = to_categorical(train_labels)
+test_labels = to_categorical(test_labels)
+
+#Code adaptered from exploring-mnist-v001.py Week 3 learning resources. Thomas W.Miller
+#Understand distribution of the training set.
+from sklearn.datasets import fetch_mldata
+mnist = fetch_mldata('MNIST original')
+
+mnist_X, mnist_y = mnist['data'], mnist['target']
+mnist_y_0_59999_df = pd.DataFrame({'label': mnist_y[0:59999,]}) 
+print('\nFrequency distribution for 60,000 observations (for model building)')
+print(mnist_y_0_59999_df['label'].value_counts(ascending = True))   
+
+mnist_y_60000_69999_df = pd.DataFrame({'label': mnist_y[60000:69999,]}) 
+print('\nFrequency distribution for last 10,000 observations (holdout sample)')
+print(mnist_y_60000_69999_df['label'].value_counts(ascending = True)) 
+
+
+#########################################
+#First model with 100 nodes
+#########################################
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Network Architecture
+from keras import models
+from keras import layers
+model = models.Sequential()
+model.add(layers.Dense(100, activation='relu', input_shape=(28 * 28,))) #28*28=784
+model.add(layers.Dense(10, activation='softmax'))
+
+#Compile Model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
+
+#Fit model
+history = model.fit(train_images, train_labels, epochs=20, batch_size=512, validation_data=(test_images, test_labels))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+ #Plotting the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#########################################
+#Second model with 250 nodes
+#########################################
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Network Architecture
+from keras import models
+from keras import layers
+model = models.Sequential()
+model.add(layers.Dense(250, activation='relu', input_shape=(28 * 28,))) #28*28=784
+model.add(layers.Dense(10, activation='softmax'))
+
+#Compile Model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
+
+#Fit model
+history = model.fit(train_images, train_labels, epochs=20, batch_size=512, validation_data=(test_images, test_labels))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plotting the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#########################################
+#Third model with 500 nodes
+#########################################
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Network Architecture
+from keras import models
+from keras import layers
+model = models.Sequential()
+model.add(layers.Dense(500, activation='relu', input_shape=(28 * 28,))) #28*28=784
+model.add(layers.Dense(10, activation='softmax'))
+
+#Compile Model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
+
+#Fit model
+history = model.fit(train_images, train_labels, epochs=20, batch_size=512, validation_data=(test_images, test_labels))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plotting the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#########################################
+#Fourth model with two hidden layers 250 nodes each
+#########################################
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Network Architecture
+from keras import models
+from keras import layers
+model = models.Sequential()
+model.add(layers.Dense(250, activation='relu', input_shape=(28 * 28,))) #28*28=784
+model.add(layers.Dense(250, activation='relu'))
+model.add(layers.Dense(10, activation='softmax'))
+
+#Compile Model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
+
+#Fit model
+history = model.fit(train_images, train_labels, epochs=20, batch_size=512, validation_data=(test_images, test_labels))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plotting the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+
+
+
+
+
+
+
+
+
+

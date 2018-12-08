@@ -1,0 +1,31 @@
+"""
+Spyder Editor
+
+This is a temporary script file.
+"""
+import numpy as np
+import pandas as pd
+dataSet=1
+
+trainingDataListA0 =  (0,[0,0,0,0,1,0,0,0,0, 0,0,0,1,0,1,0,0,0, 0,0,1,0,0,0,1,0,0, 0,1,0,0,0,0,0,1,0, 1,1,1,1,1,1,1,1,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1], 1,'A') # training data list 1 selected for the letter 'A'
+trainingDataListD0 =  (1,[1,1,1,1,1,1,1,1,0, 1,0,0,0,0,0,0,1,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,1,1, 1,1,1,1,1,1,1,1,0], 2,'D') # training data list 4, letter 'D', courtesy TD    
+trainingDataListE0 =  (2,[1,1,1,1,1,1,1,1,1, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1,1, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1,1], 3,'E') # training data list 5, letter 'E', courtesy BMcD 
+trainingDataListF0 =  (3,[1,1,1,1,1,1,1,1,1, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1,1, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0,0], 4,'F') # training data list 6, letter 'F', courtesy SK    
+trainingDataListO0 =  (4,[0,1,1,1,1,1,1,1,0, 1,1,0,0,0,0,0,1,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 0,1,1,1,1,1,1,1,0], 5,'O') # training data list 15, letter 'O', courtesy TD  
+trainingDataListQ0 =  (5,[1,1,1,1,1,1,1,1,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,0,0,0,1, 1,0,0,0,0,1,0,0,1, 1,0,0,0,0,0,1,0,1, 1,0,0,0,0,0,0,1,1, 1,1,1,1,1,1,1,1,1], 6,'Q') # training data list 17, letter 'Q', courtesy AJM (square corners)
+
+
+def printLetter (trainingDataList):    
+            
+    pixelArray = np.array(trainingDataList[1])
+    pixelArray =np.where(pixelArray == 1, 'X', ' ')    
+    pixelArray = pixelArray.reshape(((9,9)))
+    print(pixelArray)
+    print('The data set is for the letter', trainingDataList[3])
+    
+print(printLetter(trainingDataListA0))
+print(printLetter(trainingDataListD0))
+print(printLetter(trainingDataListE0))
+print(printLetter(trainingDataListF0))
+print(printLetter(trainingDataListO0))
+print(printLetter(trainingDataListQ0))

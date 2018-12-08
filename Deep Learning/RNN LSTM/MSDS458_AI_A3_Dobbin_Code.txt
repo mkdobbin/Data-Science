@@ -1,0 +1,503 @@
+
+# coding: utf-8
+
+# In[1]:
+
+
+#Matthew Dobbin
+#15th November 2018
+#MSDS458 Artificial Intelligence
+#Assignment 3 Recurrent Neural Networks
+#Reuters data set loading, exploration and MLP model adapted from
+#Deep learning with Python textbook authored by Francois Chollet
+
+
+# In[8]:
+
+
+#Import Reuters dataset, restricts the data to the
+#10,000 most frequently occuring words found in the data.
+import keras
+from keras.datasets import reuters
+(train_data, train_labels), (test_data, test_labels) = reuters.load_data(num_words=10000)
+
+#Distribution of training and test data set
+print(len(train_data), 'train sequences')
+print(len(test_data), 'test sequences')
+
+#Print undecoded newswire
+print(train_data[15])
+
+#Decodes the newswires back to text
+word_index = reuters.get_word_index()
+reverse_word_index = dict([(value, key) for (key, value) in word_index.items()])
+decoded_newswire = ' '.join([reverse_word_index.get(i - 3, '?') for i in train_data[15]])
+print(decoded_newswire)
+
+
+# In[14]:
+
+
+# Vectorize the data
+import numpy as np
+def vectorize_sequences(sequences, dimension=10000):
+    results = np.zeros((len(sequences), dimension))
+    for i, sequence in enumerate(sequences):
+        results[i, sequence] = 1.
+    return results
+
+x_train = vectorize_sequences(train_data)
+x_test = vectorize_sequences(test_data)
+
+#Vectorize labels
+from keras.utils.np_utils import to_categorical
+one_hot_train_labels = to_categorical(train_labels)
+one_hot_test_labels = to_categorical(test_labels)
+
+print(x_train.shape)
+print(x_test.shape)
+print(one_hot_train_labels.shape)
+
+
+# In[17]:
+
+
+#Multilayer Perceptron Neural Network Model
+from keras import models
+from keras import layers
+model = models.Sequential()
+model.add(layers.Dense(64, activation='relu', input_shape=(10000,)))
+model.add(layers.Dense(64, activation='relu'))
+model.add(layers.Dense(46, activation='softmax'))
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Train the model
+history = model.fit(x_train, one_hot_train_labels, epochs=10, batch_size=512, 
+                    validation_data=(x_test, one_hot_test_labels))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+#Plot model
+#from keras.utils import plot_model
+#plot_model(model, show_shapes=True, to_file='MLPmodel.png')
+
+
+# In[1]:
+
+
+#Classification using word embeddings and Recurrent neural networks.
+#Padding of sequences and SimpleRNN model code adapated from 
+#https://github.com/cmhjerry/DeepLearningMC/blob/master/RNN%20Mini%20Project.ipynb
+
+from keras.datasets import reuters
+from keras.preprocessing import sequence
+from keras.utils import np_utils
+import numpy as np
+from keras import models
+from keras import layers
+
+max_features = 10000  # number of words to consider as features
+maxlen = 500  # cut texts after this number of words (among top max_features most common words)
+batch_size = 64
+
+print('Loading data...')
+(input_train, y_train), (input_test, y_test) = reuters.load_data(num_words=max_features)
+print(len(input_train), 'train sequences')
+print(len(input_test), 'test sequences')
+
+input_train = sequence.pad_sequences(input_train, maxlen=maxlen)
+input_test = sequence.pad_sequences(input_test, maxlen=maxlen)
+print('input_train shape:', input_train.shape)
+print('input_test shape:', input_test.shape)
+print('y_train shape:', y_train.shape)
+print('y_test shape:', y_test.shape)
+
+y_train = np_utils.to_categorical(y_train, 46)
+y_test = np_utils.to_categorical(y_test, 46)
+
+
+# In[20]:
+
+
+#Recurrent Neural Network Model (SimpleRNN)
+from keras.layers import SimpleRNN, Embedding, Dense
+model = models.Sequential()
+model.add(Embedding(max_features, 64))
+model.add(SimpleRNN(64, return_sequences=True))
+model.add(SimpleRNN(64, return_sequences=True))
+model.add(SimpleRNN(64, return_sequences=True))
+model.add(SimpleRNN(64))
+model.add(Dense(46, activation='softmax'))
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+time_start=time.clock()
+
+#Train the model
+history = model.fit(input_train, y_train, epochs=10, batch_size=128, 
+                    validation_data=(input_test, y_test))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+##Plot model
+#plot_model(model, show_shapes=True, to_file='RNNmodel.png')
+
+
+# In[10]:
+
+
+#MLP Using Embeddings
+from keras.models import Sequential
+from keras.layers import Embedding, Flatten, Dense
+
+model = models.Sequential()
+model.add(Embedding(max_features, 64, input_length=maxlen))
+model.add(Flatten())
+model.add(layers.Dense(64, activation='relu'))
+model.add(layers.Dense(64, activation='relu'))
+model.add(layers.Dense(46, activation='softmax'))
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+time_start=time.clock()
+
+#Train the model
+history = model.fit(input_train, y_train, epochs=10, batch_size=128, 
+                    validation_data=(input_test, y_test))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot model
+#plot_model(model, show_shapes=True, to_file='EMLPmodel.png')
+
+
+# In[21]:
+
+
+#LSTM Model
+from keras.layers import LSTM
+model = models.Sequential()
+model.add(Embedding(max_features, 64))
+model.add(LSTM(64, return_sequences=True))
+model.add(LSTM(64, return_sequences=True))
+model.add(LSTM(64, return_sequences=True))
+model.add(LSTM(64))
+model.add(Dense(46, activation='softmax'))
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+time_start=time.clock()
+
+#Train the model
+history = model.fit(input_train, y_train, epochs=10, batch_size=128, 
+                    validation_data=(input_test, y_test))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot model
+#plot_model(model, show_shapes=True, to_file='LSTMmodel.png')
+
+
+# In[22]:
+
+
+#GRUModel
+from keras.layers import GRU
+model = models.Sequential()
+model.add(Embedding(max_features, 64))
+model.add(GRU(64, return_sequences=True))
+model.add(GRU(64, return_sequences=True))
+model.add(GRU(64, return_sequences=True))
+model.add(GRU(64))
+model.add(Dense(46, activation='softmax'))
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+time_start=time.clock()
+
+#Train the model
+history = model.fit(input_train, y_train, epochs=10, batch_size=128, 
+                    validation_data=(input_test, y_test))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot model
+#plot_model(model, show_shapes=True, to_file='GRUmodel.png')
+
+
+# In[4]:
+
+
+#1D Convnet
+model = models.Sequential()
+model.add(layers.Embedding(max_features, 64))
+model.add(layers.Conv1D(64, 7, activation='relu'))
+model.add(layers.MaxPooling1D(5))
+model.add(layers.Conv1D(64, 7, activation='relu'))
+model.add(layers.GlobalMaxPooling1D())
+model.add(layers.Dense(46, activation='softmax'))
+model.summary()
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Train the model
+history = model.fit(input_train, y_train, epochs=10, batch_size=128, 
+                    validation_data=(input_test, y_test))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#plot_model(model, show_shapes=True, to_file='1DCNNmodel.png')
+
+
+# In[17]:
+
+
+#Combined 1D CNN and LSTM model
+from keras.layers import LSTM
+model = models.Sequential()
+model.add(layers.Embedding(max_features, 64))
+model.add(layers.Conv1D(64, 7, activation='relu'))
+model.add(layers.MaxPooling1D(5))
+model.add(layers.Conv1D(64, 7, activation='relu'))
+model.add(layers.LSTM(64, return_sequences=True))
+model.add(layers.LSTM(64, return_sequences=True))
+model.add(layers.LSTM(64, return_sequences=True))
+model.add(LSTM(64))
+model.add(Dense(46, activation='softmax'))
+
+#Compiling the model
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy',metrics=['accuracy'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Train the model
+history = model.fit(input_train, y_train, epochs=10, batch_size=128, 
+                    validation_data=(input_test, y_test))
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+#plot_model(model, show_shapes=True, to_file='1DCNNLSTMmodel.png')
+

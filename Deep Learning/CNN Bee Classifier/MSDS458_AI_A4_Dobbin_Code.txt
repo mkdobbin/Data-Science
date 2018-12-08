@@ -1,0 +1,661 @@
+
+# coding: utf-8
+
+# In[1]:
+
+
+#1/12/2018
+#Matthew Dobbin
+#MSDS458 AI Assignment 4
+#Naive Bees Classifier Drivendata Competition
+#https://www.drivendata.org/competitions/8/naive-bees-classifier/
+#Code adapted from Chapter 5 Deep learning for computer vision
+#from Deep Learning with Python by Francois Chollet,.
+
+
+# In[2]:
+
+
+#Set up matplotlib, pandas, and the display function
+import os, shutil
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+from IPython.display import display
+import pandas as pd
+import numpy as np
+from PIL import Image
+get_ipython().run_line_magic('matplotlib', 'inline')
+os.getcwd()
+
+
+# In[3]:
+
+
+#load the labels
+labels = pd.read_csv('/home/ubuntu/A4/MSDS458_AI_A4_DOBBIN/train_labels.csv')
+
+def get_image(row_id, root="/home/ubuntu/A4/MSDS458_AI_A4_DOBBIN/unsorted_images/train/"):
+    """
+    Converts an image number into the file path where the image is located, 
+    opens the image, and returns the image as a numpy array.
+    """
+    filename = "{}.jpg".format(row_id)
+    file_path = os.path.join(root, filename)
+    img = Image.open(file_path)
+    return np.array(img)
+
+#Subset labels based on bee species. Honey bees genus is 0.
+honey_row = labels[labels.genus == 0.0]
+#display(honey_row.head())
+print("There are ", len(honey_row), " honey bees images in the data set.")
+
+#Display the first honey bee
+honey_one = int(honey_row.iloc[0][0])
+plt.imshow(get_image(honey_one))
+plt.show()
+
+#Split into training and validation based on 70/30
+#msk = np.random.rand(len(honey_row)) < 0.7
+#train_honey_row = honey_row[msk]
+#valid_honey_row = honey_row[~msk]
+
+bumble_row = labels[labels.genus == 1.0]
+#display(bumble_row.head())
+print("There are ", len(bumble_row), " bumble bees images in the data set.")
+
+#Dispaly the first bumble bee
+bumble_one = int(bumble_row.iloc[0][0])
+plt.imshow(get_image(bumble_one))
+plt.show()
+
+#Split into training and validation based on 70/30
+#msk = np.random.rand(len(bumble_row)) < 0.7
+#train_bumble_row = bumble_row[msk]
+#valid_bumble_row = bumble_row[~msk]
+
+
+# In[4]:
+
+
+#List directories for sorting the images into honey and bumble bees
+#for training and validation splits.
+original_dataset_dir = '/home/ubuntu/A4/MSDS458_AI_A4_DOBBIN/unsorted_images/train'
+base_dir = '/home/ubuntu/A4/MSDS458_AI_A4_DOBBIN'
+train_dir = os.path.join(base_dir, 'train')
+validation_dir = os.path.join(base_dir, 'validation')
+train_honey_dir = os.path.join(train_dir, 'honey')
+train_bumble_dir = os.path.join(train_dir, 'bumble')
+validation_honey_dir = os.path.join(validation_dir, 'honey')
+validation_bumble_dir = os.path.join(validation_dir, 'bumble')
+
+#Copy images to corresponding directors
+#Training honey bees
+#fnames = ['{}.jpg'.format(i) for i in train_honey_row['id']]
+#for fname in fnames:
+    #src = os.path.join(original_dataset_dir, fname)
+    #dst = os.path.join(train_honey_dir, fname)
+    #shutil.copyfile(src, dst)
+    
+#Validation honey bees
+#fnames = ['{}.jpg'.format(i) for i in valid_honey_row['id']]
+#for fname in fnames:
+    #src = os.path.join(original_dataset_dir, fname)
+    #dst = os.path.join(validation_honey_dir, fname)
+    #shutil.copyfile(src, dst)
+    
+#Training bumble bees
+#fnames = ['{}.jpg'.format(i) for i in train_bumble_row['id']]
+#for fname in fnames:
+    #src = os.path.join(original_dataset_dir, fname)
+    #dst = os.path.join(train_bumble_dir, fname)
+    #shutil.copyfile(src, dst)
+    
+#Validation bumble bees
+#fnames = ['{}.jpg'.format(i) for i in valid_bumble_row['id']]
+#for fname in fnames:
+    #src = os.path.join(original_dataset_dir, fname)
+    #dst = os.path.join(validation_bumble_dir, fname)
+    #shutil.copyfile(src, dst)
+
+
+# In[5]:
+
+
+#Sanity check training and validation split
+print('Total training honey bee images: ', len(os.listdir(train_honey_dir)))
+print('Total training bumble bee images: ', len(os.listdir(train_bumble_dir)))
+print('Total validation honey bee images: ', len(os.listdir(validation_honey_dir)))
+print('Total validation bumble bee images: ', len(os.listdir(validation_bumble_dir)))
+
+#Create bar graph
+# data to plot
+n_groups = 2
+honey_set = (len(os.listdir(train_honey_dir)), len(os.listdir(validation_honey_dir)))
+bumble_set = (len(os.listdir(train_bumble_dir)), len(os.listdir(validation_bumble_dir)))
+
+# create plot
+fig, ax = plt.subplots()
+index = np.arange(n_groups)
+bar_width = 0.35
+opacity = 0.8
+ 
+rects1 = plt.bar(index, honey_set, bar_width,
+                 alpha=opacity,
+                 color='b',
+                 label='Honey Bee')
+ 
+rects2 = plt.bar(index + bar_width, bumble_set, bar_width,
+                 alpha=opacity,
+                 color='g',
+                 label='Bumble Bee')
+ 
+plt.ylabel('Number of Images')
+plt.title('Distribution of Labels')
+plt.xticks(index + bar_width, ('Training', 'Validation'))
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+# In[6]:
+
+
+# Use ImageDataGenerator to read images from directories
+from keras.preprocessing.image import ImageDataGenerator
+train_datagen = ImageDataGenerator(rescale=1./255)
+test_datagen = ImageDataGenerator(rescale=1./255)
+train_generator = train_datagen.flow_from_directory(train_dir, target_size=(200,200), 
+                                                   batch_size=32, class_mode='binary')
+validation_generator = test_datagen.flow_from_directory(validation_dir,target_size=(200,200), 
+                                                   batch_size=32, class_mode='binary')                                               
+
+
+# In[8]:
+
+
+##########################################
+# First Model - Convolution Neural Network
+##########################################
+from keras import layers
+from keras import models
+
+model = models.Sequential()
+model.add(layers.Conv2D(32, (3, 3), activation='relu', input_shape=(200, 200, 3)))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Flatten())
+model.add(layers.Dense(64, activation='relu'))
+model.add(layers.Dense(1, activation='sigmoid'))
+model.summary()
+
+#Compile the model
+from keras import optimizers
+model.compile(loss='binary_crossentropy', optimizer=optimizers.RMSprop(lr=1e-4),metrics=['acc'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Fit the model using a batch generator
+history = model.fit_generator(train_generator, steps_per_epoch=100, epochs=20, 
+                              validation_data=validation_generator, validation_steps=50)
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+#Plot model and also save.
+from keras.utils import plot_model
+plot_model(model, show_shapes=True, to_file='CNN_1.png')
+model.save('CNN_1.h5')
+
+
+# In[10]:
+
+
+#Visulisation of convolutions on a honey bee image.
+from keras.models import load_model
+model = load_model('CNN_1.h5')
+
+#Pre-process the image into a 4d tensor
+from keras.preprocessing import image
+import numpy as np
+
+img_path = '/home/ubuntu/A4/MSDS458_AI_A4_DOBBIN/validation/honey/4.jpg'
+img = image.load_img(img_path, target_size=(200, 200))
+img_tensor = image.img_to_array(img)
+img_tensor = np.expand_dims(img_tensor, axis=0)
+img_tensor /= 255.
+
+#Display honey bee picture
+import matplotlib.pyplot as plt
+plt.imshow(img_tensor[0])
+plt.show()
+
+#Instantiating a model from an input tensor and a list of output tensors
+from keras import models
+from keras import layers
+
+layer_outputs = [layer.output for layer in model.layers]
+activation_model = models.Model(inputs=model.input, outputs=layer_outputs)
+
+#Running the model in predict mode
+activations = activation_model.predict(img_tensor)
+first_layer_activation = activations[0]
+print(first_layer_activation.shape)
+
+#Visualizing all layers
+#Name the layer
+layer_names = []
+for layer in model.layers:
+    layer_names.append(layer.name)
+
+print(layer_names)
+    
+images_per_row = 16
+
+#Displays the feature maps
+for layer_name, layer_activation in zip(layer_names, activations):
+    n_features = layer_activation.shape[-1]
+    size = layer_activation.shape[1]
+    n_cols = n_features // images_per_row
+    display_grid = np.zeros((size * n_cols, images_per_row * size))
+    
+    for col in range(n_cols):
+        for row in range(images_per_row):
+            channel_image = layer_activation[0, :, :, col * images_per_row + row]
+            channel_image -= channel_image.mean()
+            channel_image /= channel_image.std()
+            channel_image *= 64
+            channel_image += 128
+            channel_image = np.clip(channel_image, 0, 255).astype('uint8')
+            display_grid[col * size : (col + 1) * size, row * size : (row + 1) * size] = channel_image
+    
+    scale = 1. / size
+    plt.figure(figsize=(scale * display_grid.shape[1],
+    scale * display_grid.shape[0]))
+    plt.title(layer_name)
+    plt.grid(False)
+    plt.imshow(display_grid, aspect='auto', cmap='viridis')
+
+
+# In[13]:
+
+
+#Visulisation of convolutions on a bumble bee image.
+from keras.models import load_model
+model = load_model('CNN_1.h5')
+
+#Pre-process the image into a 4d tensor
+from keras.preprocessing import image
+import numpy as np
+
+img_path = '/home/ubuntu/A4/MSDS458_AI_A4_DOBBIN/validation/bumble/1.jpg'
+img = image.load_img(img_path, target_size=(200, 200))
+img_tensor = image.img_to_array(img)
+img_tensor = np.expand_dims(img_tensor, axis=0)
+img_tensor /= 255.
+
+#Display honey bee picture
+import matplotlib.pyplot as plt
+plt.imshow(img_tensor[0])
+plt.show()
+
+#Instantiating a model from an input tensor and a list of output tensors
+from keras import models
+from keras import layers
+
+layer_outputs = [layer.output for layer in model.layers]
+activation_model = models.Model(inputs=model.input, outputs=layer_outputs)
+
+#Running the model in predict mode
+activations = activation_model.predict(img_tensor)
+first_layer_activation = activations[0]
+print(first_layer_activation.shape)
+
+#Visualizing all layers
+#Name the layer
+layer_names = []
+for layer in model.layers:
+    layer_names.append(layer.name)
+
+print(layer_names)
+    
+images_per_row = 16
+
+#Displays the feature maps
+for layer_name, layer_activation in zip(layer_names, activations):
+    n_features = layer_activation.shape[-1]
+    size = layer_activation.shape[1]
+    n_cols = n_features // images_per_row
+    display_grid = np.zeros((size * n_cols, images_per_row * size))
+    
+    for col in range(n_cols):
+        for row in range(images_per_row):
+            channel_image = layer_activation[0, :, :, col * images_per_row + row]
+            channel_image -= channel_image.mean()
+            channel_image /= channel_image.std()
+            channel_image *= 64
+            channel_image += 128
+            channel_image = np.clip(channel_image, 0, 255).astype('uint8')
+            display_grid[col * size : (col + 1) * size, row * size : (row + 1) * size] = channel_image
+    
+    scale = 1. / size
+    plt.figure(figsize=(scale * display_grid.shape[1],
+    scale * display_grid.shape[0]))
+    plt.title(layer_name)
+    plt.grid(False)
+    plt.imshow(display_grid, aspect='auto', cmap='viridis')
+
+
+# In[14]:
+
+
+######################################
+#Second model - CNN with Dropout
+######################################
+from keras import layers
+from keras import models
+
+model = models.Sequential()
+model.add(layers.Conv2D(32, (3, 3), activation='relu', input_shape=(200, 200, 3)))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Flatten())
+model.add(layers.Dropout(0.5))
+model.add(layers.Dense(64, activation='relu'))
+model.add(layers.Dense(1, activation='sigmoid'))
+model.summary()
+
+#Compile the model
+from keras import optimizers
+model.compile(loss='binary_crossentropy', optimizer=optimizers.RMSprop(lr=1e-4),metrics=['acc'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Fit the model using a batch generator
+history = model.fit_generator(train_generator, steps_per_epoch=100, epochs=20, 
+                              validation_data=validation_generator, validation_steps=50)
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+#Plot model and also save.
+from keras.utils import plot_model
+plot_model(model, show_shapes=True, to_file='CNN_D.png')
+model.save('CNN_D.h5')
+
+
+# In[14]:
+
+
+#Set up data augmentation configuration via ImageDataGenerator
+datagen = ImageDataGenerator(rotation_range=45,
+                            width_shift_range=0.2,
+                            height_shift_range=0.2,
+                            shear_range=0.2,
+                            zoom_range=0.2,
+                            horizontal_flip=True,
+                            fill_mode='nearest')
+
+#Randomly show augmented training images
+from keras.preprocessing import image
+fnames = [os.path.join(train_honey_dir, fname) for fname in os.listdir(train_honey_dir)]
+img_path = fnames[16]
+img = image.load_img(img_path, target_size = (200,200))
+x = image.img_to_array(img)
+x = x.reshape((1,) + x.shape)
+i=0
+for batch in datagen.flow(x, batch_size=1):
+    plt.figure(i)
+    imgplot = plt.imshow(image.array_to_img(batch[0]))
+    i += 1
+    if i % 4 == 0:
+        break
+plt.show()
+
+
+# In[17]:
+
+
+######################################################
+#Model 3 Same structure as Model 2 (CNN with dropout layer) but use augmentation on the training
+#dataset. 
+######################################################
+# Use ImageDataGenerator to read images from directories
+train_datagen = ImageDataGenerator(rescale=1./255,
+                                   rotation_range=45,
+                                    width_shift_range=0.2,
+                                    height_shift_range=0.2,
+                                    shear_range=0.2,
+                                    zoom_range=0.2,
+                                    horizontal_flip=True,
+                                    fill_mode='nearest')
+
+test_datagen = ImageDataGenerator(rescale=1./255)
+train_generator = train_datagen.flow_from_directory(train_dir, target_size=(200,200), 
+                                                   batch_size=32, class_mode='binary')
+validation_generator = test_datagen.flow_from_directory(validation_dir,target_size=(200,200), 
+                                                   batch_size=32, class_mode='binary')   
+
+model = models.Sequential()
+model.add(layers.Conv2D(32, (3, 3), activation='relu', input_shape=(200, 200, 3)))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Flatten())
+model.add(layers.Dropout(0.5))
+model.add(layers.Dense(64, activation='relu'))
+model.add(layers.Dense(1, activation='sigmoid'))
+model.summary()
+
+#Compile the model
+from keras import optimizers
+model.compile(loss='binary_crossentropy', optimizer=optimizers.RMSprop(lr=1e-4),metrics=['acc'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+#Fit the model using a batch generator
+history = model.fit_generator(train_generator, steps_per_epoch=100, epochs=100, 
+                              validation_data=validation_generator, validation_steps=50)
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+#Plot model and also save.
+from keras.utils import plot_model
+plot_model(model, show_shapes=True, to_file='CNN_Aug.png')
+model.save('CNN_Aug.h5')
+
+
+# In[18]:
+
+
+#Model 4 Transfer learning - VGG16 convolutional bse
+from keras.applications import VGG16
+conv_base = VGG16(weights='imagenet', include_top=False, input_shape=(200, 200, 3))
+conv_base.summary()
+
+from keras import models
+from keras import layers
+
+model = models.Sequential()
+model.add(conv_base)
+model.add(layers.Flatten())
+model.add(layers.Dense(256, activation='relu'))
+model.add(layers.Dense(1, activation='sigmoid'))
+model.summary()
+
+
+# In[ ]:
+
+
+#Use data augmentation again.
+train_datagen = ImageDataGenerator(rescale=1./255,
+                                   rotation_range=45,
+                                    width_shift_range=0.2,
+                                    height_shift_range=0.2,
+                                    shear_range=0.2,
+                                    zoom_range=0.2,
+                                    horizontal_flip=True,
+                                    fill_mode='nearest')
+
+test_datagen = ImageDataGenerator(rescale=1./255)
+train_generator = train_datagen.flow_from_directory(train_dir, target_size=(200,200), 
+                                                   batch_size=32, class_mode='binary')
+validation_generator = test_datagen.flow_from_directory(validation_dir,target_size=(200,200), 
+                                                   batch_size=32, class_mode='binary')
+
+
+#Freeze all layers up to 'block5' and fine tune after that.
+conv_base.trainable = True
+set_trainable = False
+for layer in conv_base.layers:
+    if layer.name == 'block5_conv1':
+        set_trainable = True
+    if set_trainable:
+        layer.trainable = True
+    else:
+        layer.trainable = False
+
+# Compile the model
+model.compile(loss='binary_crossentropy', optimizer=optimizers.RMSprop(lr=1e-5), metrics=['acc'])
+
+#Start computational clock
+import time
+time_start=time.clock()
+
+history = model.fit_generator(train_generator, steps_per_epoch=100, epochs=30, 
+                              validation_data=validation_generator, validation_steps=50)
+
+seconds = (time.clock() - time_start)
+m, s = divmod(seconds, 60)
+h, m = divmod(m, 60)
+print("\nComputational time for model was:")
+print("%d:%02d:%02d" % (h, m, s))
+
+#Plot the training and validation loss
+import matplotlib.pyplot as plt
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#Plot the training and validation accuracy
+plt.clf()
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+#Plot model and also save.
+from keras.utils import plot_model
+plot_model(model, show_shapes=True, to_file='CNN_VGG16.png')
+model.save('CNN_VGG16.h5')
+
