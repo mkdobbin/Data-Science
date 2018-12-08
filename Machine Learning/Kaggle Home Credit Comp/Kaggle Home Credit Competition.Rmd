@@ -1,0 +1,2343 @@
+---
+title: "Kaggle: Home Credit Default Risk"
+author: "Matthew Dobbin"
+date: "June 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r import data, include = FALSE}
+#Read in datasets and check structures
+library(tidyverse)
+library(reshape2)
+library(magrittr) #allows use of pipes
+
+train=read.csv("C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/application_train.csv")
+test =read.csv("C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/application_test.csv")
+#str(train)
+#str(test)
+
+#Combine train and test
+#Add blank target variable to test data set and reorder similar to train
+test$TARGET=rep(NA, length(test$SK_ID_CURR))
+str(test, list.len=ncol(test))
+which(colnames(test)=="TARGET")
+test= test[c(1, 122, 2:121)]
+mydata = test$SK_ID_CURR
+#str(test, list.len=ncol(test))
+
+#Combine training and test dataset for EDA and feature engineering.
+total = rbind(train, test)
+start_total = total
+#str(total, list.len=ncol(total))
+#table(total$TARGET, useNA='always')
+
+#Loading in and combining other tables
+#Kernal was very helpful for code.# https://www.kaggle.com/matthewdobbin2018/home-credit-default-risk-step-2-54fedc/edit
+fl3 <- "C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/bureau_balance.csv" 
+fl7 <- "C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/bureau.csv"
+fl6 <- "C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/credit_card_balance.csv"
+fl5 <- "C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/installments_payments.csv"
+fl2 <- "C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/POS_CASH_balance.csv"
+fl4 <- "C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/previous_application.csv"
+```
+
+```{r bureau, include= FALSE}
+#Explore bureau data
+library(psych)
+DstBureau <- read.csv(fl7, stringsAsFactors = FALSE, na.strings = c("NA", ""))
+#dim(DstBureau)
+#str(DstBureau)
+#describe(DstBureau)
+
+#Create features
+DstBureauSum <- DstBureau %>% 
+        select(
+                SK_ID_CURR, CREDIT_ACTIVE, DAYS_CREDIT, CREDIT_DAY_OVERDUE, 
+                AMT_CREDIT_SUM
+              ) %>% 
+        group_by(SK_ID_CURR) %>% 
+        mutate(
+            CREDIT_CLOSED = sum(ifelse(CREDIT_ACTIVE == 'Closed',1,0)),
+            CREDIT_ACTIVE = sum(ifelse(CREDIT_ACTIVE == 'Active',1,0)),
+            AMT_CREDIT_CLOSED = sum(ifelse(CREDIT_ACTIVE == 'Closed',AMT_CREDIT_SUM,0)),
+            AMT_CREDIT_ACTIVE = sum(ifelse(CREDIT_ACTIVE == 'Active',AMT_CREDIT_SUM,0))
+        ) %>% 
+        summarize(
+            MAX_DAYS_CREDIT = max(abs(DAYS_CREDIT)),
+            CREDIT_DAY_OVERDUE = sum(CREDIT_DAY_OVERDUE),
+            CREDIT_CLOSED = sum(CREDIT_CLOSED),
+            CREDIT_ACTIVE = sum(CREDIT_ACTIVE)
+        )
+#Clean up
+rm(DstBureau)
+```
+
+```{r credit card balance, include= FALSE}
+#Explore credit card balance table
+DstCreditCard <- read.csv(fl6, stringsAsFactors = FALSE, na.strings = c("NA", ""))
+#dim(DstCreditCard)
+#describe(DstCreditCard)
+
+#Create features
+DstCreditCardSum <- DstCreditCard %>%
+    select(
+        SK_ID_CURR, NAME_CONTRACT_STATUS, CNT_DRAWINGS_ATM_CURRENT, CNT_DRAWINGS_CURRENT,
+        CNT_DRAWINGS_OTHER_CURRENT, CNT_DRAWINGS_POS_CURRENT, CNT_INSTALMENT_MATURE_CUM,
+        AMT_BALANCE, AMT_CREDIT_LIMIT_ACTUAL, AMT_DRAWINGS_ATM_CURRENT, AMT_DRAWINGS_CURRENT,
+        AMT_DRAWINGS_OTHER_CURRENT, AMT_DRAWINGS_POS_CURRENT, AMT_INST_MIN_REGULARITY,
+        AMT_PAYMENT_CURRENT
+          )%>% 
+        group_by(SK_ID_CURR) %>% 
+        mutate(
+            CREDITCARD_COMPLETED = ifelse(NAME_CONTRACT_STATUS == 'Completed',1,0),
+            CREDITCARD_ACTIVE = ifelse(NAME_CONTRACT_STATUS == 'Active',1,0),
+            AMT_BALANCE_COMPLETED = ifelse(NAME_CONTRACT_STATUS == 'Completed',AMT_BALANCE,0),
+            AMT_BALANCE_ACTIVE = ifelse(NAME_CONTRACT_STATUS == 'Active',AMT_BALANCE,0),
+            AMT_PAYMENT_CURRENT_COMPLETED = ifelse(NAME_CONTRACT_STATUS == 'Completed',AMT_PAYMENT_CURRENT,0),
+            AMT_PAYMENT_CURRENT_ACTIVE = ifelse(NAME_CONTRACT_STATUS == 'Active',AMT_PAYMENT_CURRENT,0)
+        ) %>% 
+        summarize(
+            NCreditCard = n()
+            
+        )
+#Clean up variables
+rm(DstCreditCard)
+```
+
+```{r pos cash balance table, include= FALSE}
+#Explore POS_CASH_balance table
+DstPosCash <- read.csv(fl2, stringsAsFactors = FALSE, na.strings = c("NA", ""))
+#dim(DstPosCash)
+#describe(DstPosCash)
+
+#Create features
+DstContractStatus <- DstPosCash %>%
+          group_by(SK_ID_CURR, NAME_CONTRACT_STATUS) %>% 
+          summarize(value = n())
+DstContractStatus <- dcast(DstContractStatus, SK_ID_CURR ~ NAME_CONTRACT_STATUS, value.var="value", fill = 0 )
+DstPosCashSum <- DstPosCash %>%
+          group_by(SK_ID_CURR) %>% 
+          summarize(
+              CNT_INSTALMENT = mean(CNT_INSTALMENT, na.rm = TRUE),
+              CNT_INSTALMENT_FUTURE = mean(CNT_INSTALMENT_FUTURE, na.rm = TRUE),
+              NPosCash = n()
+                    ) %>%
+          inner_join(DstContractStatus, by="SK_ID_CURR")
+
+#Clean up variables
+rm(list = c('DstPosCash', 'DstContractStatus'))
+```
+
+
+```{r previous application, include= FALSE}
+#Explore previous application data
+DstPrevApp <- read.csv(fl4, stringsAsFactors = FALSE, na.strings = c("NA", ""))
+#(DstPrevApp)
+#describe(DstPrevApp)
+#Create features
+DstContractStatus <- DstPrevApp %>%
+  group_by(SK_ID_CURR, NAME_CONTRACT_STATUS) %>% 
+  summarize(value = n())
+DstContractStatus <- dcast(DstContractStatus, SK_ID_CURR ~ NAME_CONTRACT_STATUS, value.var="value", fill = 0 )
+
+DstClientType <- DstPrevApp %>%
+  group_by(SK_ID_CURR, NAME_CLIENT_TYPE) %>% 
+  summarize(value = n())
+DstClientType <- dcast(DstClientType, SK_ID_CURR ~ NAME_CLIENT_TYPE, value.var="value", fill = 0 )
+
+DstPrevAppSum <- DstPrevApp %>%
+  group_by(SK_ID_CURR) %>% 
+  summarize(
+    AMT_ANNUITY_P = mean(AMT_ANNUITY, na.rm = TRUE),
+    AMT_APPLICATION_P = mean(AMT_APPLICATION, na.rm = TRUE),
+    AMT_CREDIT_P = mean(AMT_CREDIT, na.rm = TRUE),
+    AMT_DOWN_PAYMENT_P = mean(AMT_DOWN_PAYMENT, na.rm = TRUE),
+    AMT_GOODS_PRICE_P = mean(AMT_GOODS_PRICE, na.rm = TRUE),
+    NPrevApp = n()
+    ) %>%
+  inner_join(DstContractStatus, by="SK_ID_CURR") %>%
+  inner_join(DstClientType, by="SK_ID_CURR")
+
+#Clean up variables
+rm(list = c('DstPrevApp', 'DstContractStatus', 'DstClientType'))
+
+```
+
+```{r combine tables, include= FALSE}
+# Join summarised features to the application table based on SK_ID_CURR
+total <- total %>%
+    left_join(DstBureauSum, by="SK_ID_CURR") %>%
+    left_join(DstCreditCardSum, by="SK_ID_CURR") %>%
+    left_join(DstPosCashSum, by="SK_ID_CURR") %>%
+    left_join(DstPrevAppSum, by="SK_ID_CURR") 
+```
+
+##Appendix 2 - Exploratory Data Analysis
+
+```{r, include= FALSE}
+#Explore Application data, load in libraries
+merged_total = total
+library(psych)
+library(lessR)
+library(vcd)
+#describe(total)
+```
+```{r, echo=FALSE}
+plot(total$SK_ID_CURR)
+```
+Table B.1 - SK_ID_CURR
+ID of loan in our sample
+ 
+```{r, echo=FALSE}
+#plot(total$TARGET)
+hist(total$TARGET, col = "blue")
+#table(total$TARGET, useNA= 'always')
+```
+Figure B.2 - Histogram of Dependant variable. 
+Target variable (1 - client with payment difficulties: he/she had late payment more than X days on at least one of the first Y installments of the loan in our sample, 0 - all other cases)
+
+```{r, echo=FALSE}
+#SummaryStats(NAME_CONTRACT_TYPE, data = total)
+missp <- sum(is.na(total$NAME_CONTRACT_TYPE)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$NAME_CONTRACT_TYPE))
+mosaicplot(total$NAME_CONTRACT_TYPE ~ total$TARGET, main="NAME_CONTRACT_TYPE", color=TRUE, 
+xlab="NAME_CONTRACT_TYPE", ylab="TARGET")
+total$NAME_CONTRACT_TYPE_DMY <- ifelse(total$NAME_CONTRACT_TYPE == "Cash loans", 1, 0)
+#table(total$NAME_CONTRACT_TYPE_DMY, useNA= 'always')
+```
+Figure B.3 - Bar and Moasaic Plot of NAME_CONTRACT_TYPE 
+Identification if loan is cash or revolving. Categorical variable transformed into dummy variable (1 if Cash, 0 if Revolving)
+
+```{r, echo=FALSE}
+#SummaryStats(CODE_GENDER, data = total)
+missp <- sum(is.na(total$CODE_GENDER)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$CODE_GENDER))
+mosaicplot(total$CODE_GENDER ~ total$TARGET, main="CODE_GENDER", color=TRUE, 
+xlab="CODE_GENDER", ylab="TARGET")
+total$CODE_GENDER_M <- ifelse(total$CODE_GENDER == "M", 1, 0)
+total$CODE_GENDER_F <- ifelse(total$CODE_GENDER == "F", 1, 0)
+```
+Figure B.4 - Bar and Mosaic plot of CODE_GENDER
+Gender of the client. Three levels coded into two dummy variables. 
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_OWN_CAR, data = total)
+missp <- sum(is.na(total$FLAG_OWN_CAR)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_OWN_CAR))
+mosaicplot(total$FLAG_OWN_CAR ~ total$TARGET, main="FLAG_OWN_CAR", color=TRUE, 
+xlab="FLAG_OWN_CAR", ylab="TARGET")
+total$FLAG_OWN_CAR_Y <- ifelse(total$FLAG_OWN_CAR == "Y", 1, 0)
+```
+Figure B.5 - Bar and Mosaic plot of FLAG_OWN_CAR
+Flag if the client owns a car. Coded into dummy variable (1 owns a car, 0 does not own a car)
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_OWN_REALTY, data = total)
+missp <- sum(is.na(total$FLAG_OWN_REALTY)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_OWN_REALTY))
+mosaicplot(total$FLAG_OWN_REALTY ~ total$TARGET, main="FLAG_OWN_REALTY", color=TRUE, 
+xlab="FLAG_OWN_REALTY", ylab="TARGET")
+total$FLAG_OWN_REALTY_Y <- ifelse(total$FLAG_OWN_REALTY == "Y", 1, 0)
+```
+Figure B.6 - Mosaic plot of FLAG_OWN_REALTY
+Flag if client owns a house or flat. Coded into dummy variable (1 owns realty, 0 does not own realty).
+
+```{r, echo=FALSE}
+#SummaryStats(CNT_CHILDREN, data = total)
+missp <- sum(is.na(total$CNT_CHILDREN)/nrow(total)) #0
+par(mfrow = c(1,2))
+hist(total$CNT_CHILDREN, col = "blue")
+boxplot(total$CNT_CHILDREN, col = "blue")
+
+```
+Figure B.7 - Histogram and boxplot of CNT_CHILDREN
+Number of children the client has. Largest number is 20. It is possible, won't be treated as an outlier.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_INCOME_TOTAL, data = total)
+missp <- sum(is.na(total$AMT_INCOME_TOTAL)/nrow(total)) #0
+par(mfrow = c(1,2))
+hist(total$AMT_INCOME_TOTAL, col = "blue")
+boxplot(total$AMT_INCOME_TOTAL, col = "blue")
+total$AMT_INCOME_TOTAL <- ifelse(total$AMT_INCOME_TOTAL > 500000, NA, total$AMT_INCOME_TOTAL)
+MEEN <- mean(total$AMT_INCOME_TOTAL, na.rm=TRUE) 
+total$AMT_INCOME_TOTAL <- ifelse(is.na(total$AMT_INCOME_TOTAL), MEEN, total$AMT_INCOME_TOTAL)
+#hist(total$AMT_INCOME_TOTAL, col = "blue")
+#boxplot(total$AMT_INCOME_TOTAL, col = "blue")
+```
+Figure B.8 - Histogram and boxplot of AMT_INCOME_TOTAL
+Income of the client. One outlier of 12m, changed to mean value.
+
+```{r, echo=FALSE}
+SummaryStats(AMT_CREDIT, data = total)
+missp <- sum(is.na(total$AMT_CREDIT)/nrow(total)) #0
+par(mfrow = c(1,2))
+hist(total$AMT_CREDIT, col = "blue")
+boxplot(total$AMT_CREDIT, col = "blue")
+```
+Figure B.9 - Histogram and boxplot of AMT_CREDIT
+Credit amount of the loan.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_ANNUITY, data = total)
+missp <- sum(is.na(total$AMT_ANNUITY)/nrow(total)) #<1%
+MEEN <- mean(total$AMT_ANNUITY, na.rm=TRUE) 
+total$AMT_ANNUITY <- ifelse(is.na(total$AMT_ANNUITY), MEEN, total$AMT_ANNUITY)
+par(mfrow = c(1,2))
+hist(total$AMT_ANNUITY, col = "blue")
+boxplot(total$AMT_ANNUITY, col = "blue")
+```
+Figure B.10 - Histogram and boxplot of AMT_ANNUITY
+Loan annuity. Less than 1% missing values. NA values given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_GOODS_PRICE, data = total)
+missp <- sum(is.na(total$AMT_GOODS_PRICE)/nrow(total)) #<1% 
+MEEN <- mean(total$AMT_GOODS_PRICE, na.rm=TRUE) 
+total$AMT_GOODS_PRICE <- ifelse(is.na(total$AMT_GOODS_PRICE), MEEN, total$AMT_GOODS_PRICE)
+par(mfrow = c(1,2))
+hist(total$AMT_GOODS_PRICE, col = "blue")
+boxplot(total$AMT_GOODS_PRICE, col = "blue")
+```
+Figure B.11 - Histogram and Boxplot of AMT_GOODS_PRICE
+For consumer loans it is the price of the goods for which the loan is given. 
+Less than 1% missing values. NA values given mean value.
+
+```{r, echo=FALSE}
+SummaryStats(NAME_TYPE_SUITE, data = total)
+missp <- sum(is.na(total$NAME_TYPE_SUITE)/nrow(total)) #0
+#barplot(table(total$NAME_TYPE_SUITE))
+total$NAME_TYPE_SUITE_C <- ifelse(total$NAME_TYPE_SUITE == "Children", 1, 0)
+total$NAME_TYPE_SUITE_F <- ifelse(total$NAME_TYPE_SUITE == "Family", 1, 0)
+total$NAME_TYPE_SUITE_G <- ifelse(total$NAME_TYPE_SUITE == "Group of people", 1, 0)
+total$NAME_TYPE_SUITE_A <- ifelse(total$NAME_TYPE_SUITE == "Other_A", 1, 0)
+total$NAME_TYPE_SUITE_B <- ifelse(total$NAME_TYPE_SUITE == "Other_B", 1, 0)
+total$NAME_TYPE_SUITE_S <- ifelse(total$NAME_TYPE_SUITE == "Spouse, partner", 1, 0)
+```
+Figure B.12 - Categories of NAME_TYPE_SUITE
+Who was accompanying client when he was applying for the loan. Seven levels coded into 6 dummy variables.
+
+```{r, echo=FALSE}
+SummaryStats(NAME_INCOME_TYPE, data = total)
+missp <- sum(is.na(total$NAME_INCOME_TYPE)/nrow(total)) #0
+par(mfrow = c(1,1))
+#barplot(table(total$NAME_INCOME_TYPE))
+total$NAME_INCOME_TYPE_B <- ifelse(total$NAME_INCOME_TYPE == "Businessman", 1, 0)
+total$NAME_INCOME_TYPE_C <- ifelse(total$NAME_INCOME_TYPE == "Commercial associate", 1, 0)
+total$NAME_INCOME_TYPE_ML <- ifelse(total$NAME_INCOME_TYPE == "Maternity leave", 1, 0)
+total$NAME_INCOME_TYPE_P <- ifelse(total$NAME_INCOME_TYPE == "Pensioner", 1, 0)
+total$NAME_INCOME_TYPE_SS <- ifelse(total$NAME_INCOME_TYPE == "State servant", 1, 0)
+total$NAME_INCOME_TYPE_S <- ifelse(total$NAME_INCOME_TYPE == "Student", 1, 0)
+total$NAME_INCOME_TYPE_W <- ifelse(total$NAME_INCOME_TYPE == "Working", 1, 0)
+```
+Figure B.13 - Categories of NAME_INCOME_TYPE
+Clients income type (businessman, working, maternity leave,.)
+
+```{r, echo=FALSE}
+SummaryStats(NAME_EDUCATION_TYPE, data = total)
+missp <- sum(is.na(total$NAME_EDUCATION_TYPE)/nrow(total)) #0
+par(mfrow = c(1,1))
+#barplot(table(total$NAME_EDUCATION_TYPE))
+#mosaicplot(total$NAME_EDUCATION_TYPE ~ total$TARGET, main="NAME_EDUCATION_TYPE", color=TRUE, 
+#xlab="NAME_EDUCATION_TYPE", ylab="TARGET")
+total$NAME_EDUCATION_TYPE_AD <- ifelse(total$NAME_EDUCATION_TYPE == "Academic degree", 1, 0)
+total$NAME_EDUCATION_TYPE_HE <- ifelse(total$NAME_EDUCATION_TYPE == "Higher education", 1, 0)
+total$NAME_EDUCATION_TYPE_LS <- ifelse(total$NAME_EDUCATION_TYPE == "Lower secondary", 1, 0)
+total$NAME_EDUCATION_TYPE_SS <- ifelse(total$NAME_EDUCATION_TYPE == "Secondary / secondary special", 1, 0)
+```
+Figure B.14 - Categories of NAME_EDUCATION_TYPE
+Level of highest education the client achieved. 5 levels coded into 4 dummy variables.
+
+
+```{r, echo=FALSE}
+SummaryStats(NAME_FAMILY_STATUS, data = total)
+missp <- sum(is.na(total$NAME_FAMILY_STATUS)/nrow(total)) #0
+par(mfrow = c(1,1))
+#barplot(table(total$NAME_FAMILY_STATUS))
+#mosaicplot(total$NAME_FAMILY_STATUS ~ total$TARGET, main="NAME_FAMILY_STATUS", color=TRUE, 
+#xlab="NAME_FAMILY_STATUS", ylab="TARGET")
+total$NAME_FAMILY_STATUS_CM <- ifelse(total$NAME_FAMILY_STATUS == "Civil marriage", 1, 0)
+total$NAME_FAMILY_STATUS_M <- ifelse(total$NAME_FAMILY_STATUS == "Married", 1, 0)
+total$NAME_FAMILY_STATUS_S <- ifelse(total$NAME_FAMILY_STATUS == "Separated", 1, 0)
+total$NAME_FAMILY_STATUS_SNM <- ifelse(total$NAME_FAMILY_STATUS == "Single / not married", 1, 0)
+total$NAME_FAMILY_STATUS_W <- ifelse(total$NAME_FAMILY_STATUS == "Widow", 1, 0)
+```
+Figure B.15 - Categories of NAME_FAMILY_STATUS
+Family status of the client. Six levels coded into 5 dummy variables.
+
+```{r, echo=FALSE}
+SummaryStats(NAME_HOUSING_TYPE, data = total)
+missp <- sum(is.na(total$NAME_HOUSING_TYPE)/nrow(total)) #0
+par(mfrow = c(1,1))
+#barplot(table(total$NAME_HOUSING_TYPE))
+#mosaicplot(total$NAME_HOUSING_TYPE ~ total$TARGET, main="NAME_HOUSING_TYPE", color=TRUE, 
+#xlab="NAME_HOUSING_TYPE", ylab="TARGET")
+total$NAME_HOUSING_TYPE_CO <- ifelse(total$NAME_HOUSING_TYPE == "Co-op apartment", 1, 0)
+total$NAME_HOUSING_TYPE_H <- ifelse(total$NAME_HOUSING_TYPE == "House / apartment", 1, 0)
+total$NAME_HOUSING_TYPE_M <- ifelse(total$NAME_HOUSING_TYPE == "Municipal apartment", 1, 0)
+total$NAME_HOUSING_TYPE_O <- ifelse(total$NAME_HOUSING_TYPE == "Office apartment", 1, 0)
+total$NAME_HOUSING_TYPE_R <- ifelse(total$NAME_HOUSING_TYPE == "Rented apartment", 1, 0)
+```
+Figure B.16 - NAME_HOUSING_TYPE
+What is the housing situation of the client. 6 levels coded into 5 dummy variables.
+
+```{r, echo=FALSE}
+#SummaryStats(REGION_POPULATION_RELATIVE, data = total)
+missp <- sum(is.na(total$REGION_POPULATION_RELATIVE)/nrow(total)) #0 
+par(mfrow = c(1,2))
+hist(total$REGION_POPULATION_RELATIVE, col = "blue")
+boxplot(total$REGION_POPULATION_RELATIVE, col = "blue")
+```
+Figure B.17 - REGION_POPULATION_RELATIVE
+Normalized population of region where client lives (higher number means the client lives in more populated region)
+
+```{r, echo=FALSE}
+#SummaryStats(DAYS_BIRTH, data = total)
+missp <- sum(is.na(total$DAYS_BIRTH)/nrow(total)) #0 
+par(mfrow = c(1,2))
+hist(total$DAYS_BIRTH, col = "blue")
+boxplot(total$DAYS_BIRTH, col = "blue")
+```
+Figure B.18 - DAYS_BIRTH
+Client's age in days at the time of application. Youngest age 20, oldest 69.
+
+```{r, echo=FALSE}
+#SummaryStats(DAYS_EMPLOYED, data = total)
+total$DAYS_EMPLOYED =start_total$DAYS_EMPLOYED
+missp <- sum(is.na(total$DAYS_EMPLOYED)/nrow(total)) #0
+#Approximatley 20% have values above 365243. Outlier.
+total$DAYS_EMPLOYED <- ifelse(total$DAYS_EMPLOYED > 0, NA, total$DAYS_EMPLOYED)
+MEEN <- mean(total$DAYS_EMPLOYED, na.rm=TRUE) 
+total$DAYS_EMPLOYED <- ifelse(is.na(total$DAYS_EMPLOYED), MEEN, total$DAYS_EMPLOYED)
+par(mfrow = c(1,2))
+hist(total$DAYS_EMPLOYED, col = "blue")
+boxplot(total$DAYS_EMPLOYED, col = "blue")
+```
+Figure B.19 - DAYS_EMPLOYED
+How many days before the application the person started current employment. Outlier way above 0, given mean value. Maximum employment approximatley 50 years is possible.
+
+
+```{r, echo=FALSE}
+#SummaryStats(DAYS_REGISTRATION, data = total)
+missp <- sum(is.na(total$DAYS_REGISTRATION)/nrow(total)) #0 
+par(mfrow = c(1,2))
+hist(total$DAYS_REGISTRATION, col = "blue")
+boxplot(total$DAYS_REGISTRATION, col = "blue")
+```
+Figure B.20 - DAYS_REGISTRATION
+How many days before the application did client change his registration
+
+```{r, echo=FALSE}
+#SummaryStats(DAYS_ID_PUBLISH, data = total)
+missp <- sum(is.na(total$DAYS_ID_PUBLISH)/nrow(total)) #0 
+par(mfrow = c(1,2))
+hist(total$DAYS_ID_PUBLISH, col = "blue")
+boxplot(total$DAYS_ID_PUBLISH, col = "blue")
+```
+Figure B.21 - DAYS_ID_PUBLISH
+How many days before the application did client change the identity document with which he applied for the loan
+
+```{r, echo=FALSE}
+#SummaryStats(OWN_CAR_AGE, data = total)
+missp <- sum(is.na(total$OWN_CAR_AGE)/nrow(total)) #66% missing 
+par(mfrow = c(1,2))
+hist(total$OWN_CAR_AGE, col = "blue")
+boxplot(total$OWN_CAR_AGE, col = "blue")
+total$OWN_CAR_AGE = ifelse(is.na(total$OWN_CAR_AGE), 0, 1)
+#table(total$OWN_CAR_AGE)
+```
+Figure B.22 - OWN_CAR_AGE
+Age of client's car. 66% missing values, Variable coded as dummy variable, 1 if value, 0 if missing.
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_MOBIL, data = total)
+missp <- sum(is.na(total$FLAG_MOBIL)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_MOBIL))
+mosaicplot(total$FLAG_MOBIL ~ total$TARGET, main="FLAG_MOBIL", color=TRUE, 
+xlab="FLAG_MOBIL", ylab="TARGET")
+```
+Figure B.23 - FLAG_MOBIL
+Did client provide mobile phone (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_EMP_PHONE, data = total)
+missp <- sum(is.na(total$FLAG_EMP_PHONE)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_EMP_PHONE))
+mosaicplot(total$FLAG_EMP_PHONE ~ total$TARGET, main="FLAG_EMP_PHONE", color=TRUE, 
+xlab="FLAG_EMP_PHONE", ylab="TARGET")
+```
+Figure B.24 - FLAG_EMP_PHONE
+Did client provide work phone (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_WORK_PHONE, data = total)
+missp <- sum(is.na(total$FLAG_WORK_PHONE)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_WORK_PHONE))
+mosaicplot(total$FLAG_WORK_PHONE ~ total$TARGET, main="FLAG_WORK_PHONE", color=TRUE, 
+xlab="FLAG_WORK_PHONE", ylab="TARGET")
+```
+Figure B.25 - FLAG_WORK_PHONE
+Did client provide home phone (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_CONT_MOBILE, data = total)
+missp <- sum(is.na(total$FLAG_CONT_MOBILE)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_CONT_MOBILE))
+mosaicplot(total$FLAG_CONT_MOBILE ~ total$TARGET, main="FLAG_CONT_MOBILE", color=TRUE, 
+xlab="FLAG_CONT_MOBILE", ylab="TARGET")
+```
+Figure B.26 - FLAG_CONT_MOBILE
+Was mobile phone reachable (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_PHONE, data = total)
+missp <- sum(is.na(total$FLAG_PHONE)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_PHONE))
+mosaicplot(total$FLAG_PHONE ~ total$TARGET, main="FLAG_PHONE", color=TRUE, 
+xlab="FLAG_PHONE", ylab="TARGET")
+```
+Figure B.27 - FLAG_PHONE
+Did client provide home phone (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_EMAIL, data = total)
+missp <- sum(is.na(total$FLAG_EMAIL)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_EMAIL))
+mosaicplot(total$FLAG_EMAIL ~ total$TARGET, main="FLAG_EMAIL", color=TRUE, 
+xlab="FLAG_EMAIL", ylab="TARGET")
+```
+Figure B.28 - FLAG_EMAIL
+Did client provide email (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+SummaryStats(OCCUPATION_TYPE, data = total)
+missp <- sum(is.na(total$OCCUPATION_TYPE)/nrow(total)) #0
+#par(mfrow=c(1,2))
+#barplot(table(total$OCCUPATION_TYPE))
+#mosaicplot(total$OCCUPATION_TYPE ~ total$TARGET, main="OCCUPATION_TYPE", color=TRUE, 
+#xlab="OCCUPATION_TYPE", ylab="TARGET")
+total$OCCUPATION_TYPE_A <- ifelse(total$OCCUPATION_TYPE == "Accountants", 1, 0)
+total$OCCUPATION_TYPE_CL <- ifelse(total$OCCUPATION_TYPE == "Cleaning staff", 1, 0)
+total$OCCUPATION_TYPE_CK <- ifelse(total$OCCUPATION_TYPE == "Cooking staff", 1, 0)
+total$OCCUPATION_TYPE_CS <- ifelse(total$OCCUPATION_TYPE == "Core staff", 1, 0)
+total$OCCUPATION_TYPE_D <- ifelse(total$OCCUPATION_TYPE == "Drivers", 1, 0)
+total$OCCUPATION_TYPE_HS <- ifelse(total$OCCUPATION_TYPE == "High skill tech staff", 1, 0)
+total$OCCUPATION_TYPE_HR <- ifelse(total$OCCUPATION_TYPE == "HR staff", 1, 0)
+total$OCCUPATION_TYPE_IT <- ifelse(total$OCCUPATION_TYPE == "IT staff", 1, 0)
+total$OCCUPATION_TYPE_LA <- ifelse(total$OCCUPATION_TYPE == "Laborers", 1, 0)
+total$OCCUPATION_TYPE_LS <- ifelse(total$OCCUPATION_TYPE == "Low-skill Laborers", 1, 0)
+total$OCCUPATION_TYPE_M <- ifelse(total$OCCUPATION_TYPE == "Managers", 1, 0)
+total$OCCUPATION_TYPE_MD <- ifelse(total$OCCUPATION_TYPE == "Medicine staff", 1, 0)
+total$OCCUPATION_TYPE_P <- ifelse(total$OCCUPATION_TYPE == "Private service staff", 1, 0)
+total$OCCUPATION_TYPE_R <- ifelse(total$OCCUPATION_TYPE == "Realty agents", 1, 0)
+total$OCCUPATION_TYPE_SS <- ifelse(total$OCCUPATION_TYPE == "Sales staff", 1, 0)
+total$OCCUPATION_TYPE_SAT <- ifelse(total$OCCUPATION_TYPE == "Secretaries", 1, 0)
+total$OCCUPATION_TYPE_SEC <- ifelse(total$OCCUPATION_TYPE == "Security staff", 1, 0)
+
+```
+Figure B.29 - Categories of OCCUPATION_TYPE
+What kind of occupation does the client have. 18 levels coded into 17 dummy variables.
+
+```{r, echo=FALSE}
+#SummaryStats(CNT_FAM_MEMBERS, data = total)
+missp <- sum(is.na(total$CNT_FAM_MEMBERS)/nrow(total)) #<1% 
+par(mfrow = c(1,2))
+hist(total$CNT_FAM_MEMBERS, col = "blue")
+boxplot(total$CNT_FAM_MEMBERS, col = "blue")
+MEEN <- mean(total$CNT_FAM_MEMBERS, na.rm=TRUE) 
+total$CNT_FAM_MEMBERS <- ifelse(is.na(total$CNT_FAM_MEMBERS), MEEN, total$CNT_FAM_MEMBERS)
+```
+Figure B.30 - CNT_FAM_MEMBERS
+How many family members does client have. Hard to tell if this is an outlier. A family size of 20 is possible.
+
+```{r, echo=FALSE}
+#SummaryStats(REGION_RATING_CLIENT, data = total)
+missp <- sum(is.na(total$REGION_RATING_CLIENT)/nrow(total)) #<0% 
+hist(total$REGION_RATING_CLIENT, col = "blue")
+#table(total$REGION_RATING_CLIENT)
+```
+Figure B.31 - REGION_RATING_CLIENT
+Our rating of the region where client lives (1,2,3)
+
+```{r, echo=FALSE}
+#SummaryStats(REGION_RATING_CLIENT_W_CITY, data = total)
+#table(total$REGION_RATING_CLIENT_W_CITY)
+missp <- sum(is.na(total$REGION_RATING_CLIENT_W_CITY)/nrow(total)) #<0% 
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+MODE <- getmode(total$REGION_RATING_CLIENT_W_CITY)
+total$REGION_RATING_CLIENT_W_CITY <- ifelse(total$REGION_RATING_CLIENT_W_CITY < 1, MODE, total$REGION_RATING_CLIENT_W_CITY)
+hist(total$REGION_RATING_CLIENT_W_CITY, col = "blue")
+```
+Figure B.32 - REGION_RATING_CLIENT_W_CITY
+Our rating of the region where client lives with taking city into account (1,2,3). Outlier of -1 given mode value.
+
+```{r, echo=FALSE}
+SummaryStats(WEEKDAY_APPR_PROCESS_START, data = total)
+total$WEEKDAY_APPR_PROCESS_START_S <- ifelse(total$WEEKDAY_APPR_PROCESS_START == "SUNDAY", 1, 0)
+total$WEEKDAY_APPR_PROCESS_START_M <- ifelse(total$WEEKDAY_APPR_PROCESS_START == "MONDAY", 1, 0)
+total$WEEKDAY_APPR_PROCESS_START_T <- ifelse(total$WEEKDAY_APPR_PROCESS_START == "TUESDAY", 1, 0)
+total$WEEKDAY_APPR_PROCESS_START_W <- ifelse(total$WEEKDAY_APPR_PROCESS_START == "WEDNESDAY", 1, 0)
+total$WEEKDAY_APPR_PROCESS_START_T <- ifelse(total$WEEKDAY_APPR_PROCESS_START == "THURSDAY", 1, 0)
+total$WEEKDAY_APPR_PROCESS_START_F <- ifelse(total$WEEKDAY_APPR_PROCESS_START == "FRIDAY", 1, 0)
+```
+Figure B.33 - Categories of WEEKDAY_APPR_PROCESS_START
+On which day of the week did the client apply for the loan. Coded into 6 dummy  variables.
+
+```{r, echo=FALSE}
+#SummaryStats(HOUR_APPR_PROCESS_START, data = total)
+missp <- sum(is.na(total$HOUR_APPR_PROCESS_START)/nrow(total)) #0% 
+par(mfrow = c(1,2))
+hist(total$HOUR_APPR_PROCESS_START, col = "blue")
+boxplot(total$HOUR_APPR_PROCESS_START, col = "blue")
+```
+Figure B.34 - HOUR_APPR_PROCESS_START
+Approximately at what hour did the client apply for the loan. Must have 24 hour ability to complete form (online?).
+
+```{r, echo=FALSE}
+#SummaryStats(REG_REGION_NOT_LIVE_REGION, data = total)
+missp <- sum(is.na(total$REG_REGION_NOT_LIVE_REGION)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$REG_REGION_NOT_LIVE_REGION))
+mosaicplot(total$REG_REGION_NOT_LIVE_REGION ~ total$TARGET, main="REG_REGION_NOT_LIVE_REGION", color=TRUE, 
+xlab="REG_REGION_NOT_LIVE_REGION", ylab="TARGET")
+```
+Figure B.35 - REG_REGION_NOT_LIVE_REGION
+Flag if client's permanent address does not match contact address (1=different, 0=same, at region level)
+
+```{r, echo=FALSE}
+#SummaryStats(REG_REGION_NOT_WORK_REGION, data = total)
+missp <- sum(is.na(total$REG_REGION_NOT_WORK_REGION)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$REG_REGION_NOT_WORK_REGION))
+mosaicplot(total$REG_REGION_NOT_WORK_REGION ~ total$TARGET, main="REG_REGION_NOT_WORK_REGION", color=TRUE, 
+xlab="REG_REGION_NOT_WORK_REGION", ylab="TARGET")
+```
+Figure B.36 - REG_REGION_NOT_WORK_REGION
+Flag if client's permanent address does not match work address (1=different, 0=same, at region level)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVE_REGION_NOT_WORK_REGION, data = total)
+missp <- sum(is.na(total$LIVE_REGION_NOT_WORK_REGION)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$LIVE_REGION_NOT_WORK_REGION))
+mosaicplot(total$LIVE_REGION_NOT_WORK_REGION ~ total$TARGET, main="LIVE_REGION_NOT_WORK_REGION", color=TRUE, 
+xlab="LIVE_REGION_NOT_WORK_REGION", ylab="TARGET")
+```
+Figure B.37 - LIVE_REGION_NOT_WORK_REGION
+Flag if client's contact address does not match work address (1=different, 0=same, at region level)
+
+```{r, echo=FALSE}
+#SummaryStats(REG_CITY_NOT_LIVE_CITY, data = total)
+missp <- sum(is.na(total$REG_CITY_NOT_LIVE_CITY)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$REG_CITY_NOT_LIVE_CITY))
+mosaicplot(total$REG_CITY_NOT_LIVE_CITY ~ total$TARGET, main="REG_CITY_NOT_LIVE_CITY", color=TRUE, 
+xlab="REG_CITY_NOT_LIVE_CITY", ylab="TARGET")
+```
+Figure B.38 - REG_CITY_NOT_LIVE_CITY
+Flag if client's permanent address does not match contact address (1=different, 0=same, at city level)
+
+```{r, echo=FALSE}
+#SummaryStats(REG_CITY_NOT_WORK_CITY, data = total)
+missp <- sum(is.na(total$REG_CITY_NOT_WORK_CITY)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$REG_CITY_NOT_WORK_CITY))
+mosaicplot(total$REG_CITY_NOT_WORK_CITY ~ total$TARGET, main="REG_CITY_NOT_WORK_CITY", color=TRUE, 
+xlab="REG_CITY_NOT_WORK_CITY", ylab="TARGET")
+```
+Figure B.39 - Flag if client's permanent address does not match work address (1=different, 0=same, at city level)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVE_CITY_NOT_WORK_CITY, data = total)
+missp <- sum(is.na(total$LIVE_CITY_NOT_WORK_CITY)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$LIVE_CITY_NOT_WORK_CITY))
+mosaicplot(total$LIVE_CITY_NOT_WORK_CITY ~ total$TARGET, main="LIVE_CITY_NOT_WORK_CITY", color=TRUE, 
+xlab="LIVE_CITY_NOT_WORK_CITY", ylab="TARGET")
+```
+Figure B.40 - LIVE_CITY_NOT_WORK_CITY
+Flag if client's contact address does not match work address (1=different, 0=same, at city level)
+
+```{r, echo=FALSE}
+#SummaryStats(ORGANIZATION_TYPE, data = total)
+table(start_total$ORGANIZATION_TYPE)
+missp <- sum(is.na(total$ORGANIZATION_TYPE)/nrow(total)) #0
+total$ORGANIZATION_TYPE_ADV <- ifelse(total$ORGANIZATION_TYPE == "Advertising", 1, 0)
+total$ORGANIZATION_TYPE_AG <- ifelse(total$ORGANIZATION_TYPE == "Agriculture", 1, 0)
+total$ORGANIZATION_TYPE_B <- ifelse(total$ORGANIZATION_TYPE == "Bank", 1, 0)
+total$ORGANIZATION_TYPE_BT1 <- ifelse(total$ORGANIZATION_TYPE == "Business Entity Type 1", 1, 0)
+total$ORGANIZATION_TYPE_BT2 <- ifelse(total$ORGANIZATION_TYPE == "Business Entity Type 2", 1, 0)
+total$ORGANIZATION_TYPE_BT3 <- ifelse(total$ORGANIZATION_TYPE == "Business Entity Type 3", 1, 0)
+total$ORGANIZATION_TYPE_CL <- ifelse(total$ORGANIZATION_TYPE == "Cleaning", 1, 0)
+total$ORGANIZATION_TYPE_CO <- ifelse(total$ORGANIZATION_TYPE == "Construction", 1, 0)
+total$ORGANIZATION_TYPE_CU <- ifelse(total$ORGANIZATION_TYPE == "Culture", 1, 0)
+total$ORGANIZATION_TYPE_EL <- ifelse(total$ORGANIZATION_TYPE == "Electricity", 1, 0)
+total$ORGANIZATION_TYPE_EM <- ifelse(total$ORGANIZATION_TYPE == "Emergency", 1, 0)
+total$ORGANIZATION_TYPE_G <- ifelse(total$ORGANIZATION_TYPE == "Government", 1, 0)
+total$ORGANIZATION_TYPE_HT <- ifelse(total$ORGANIZATION_TYPE == "Hotel", 1, 0)
+total$ORGANIZATION_TYPE_HO <- ifelse(total$ORGANIZATION_TYPE == "Housing", 1, 0)
+total$ORGANIZATION_TYPE_I1 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 1", 1, 0)
+total$ORGANIZATION_TYPE_I2 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 2", 1, 0)
+total$ORGANIZATION_TYPE_I3 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 3", 1, 0)
+total$ORGANIZATION_TYPE_I4 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 4", 1, 0)
+total$ORGANIZATION_TYPE_I5 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 5", 1, 0)
+total$ORGANIZATION_TYPE_I6 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 6", 1, 0)
+total$ORGANIZATION_TYPE_I7 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 7", 1, 0)
+total$ORGANIZATION_TYPE_I8 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 8", 1, 0)
+total$ORGANIZATION_TYPE_I9 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 9", 1, 0)
+total$ORGANIZATION_TYPE_I10 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 10", 1, 0)
+total$ORGANIZATION_TYPE_I11 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 11", 1, 0)
+total$ORGANIZATION_TYPE_I12 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 12", 1, 0)
+total$ORGANIZATION_TYPE_I13 <- ifelse(total$ORGANIZATION_TYPE == "Industry: type 13", 1, 0)
+total$ORGANIZATION_TYPE_IN <- ifelse(total$ORGANIZATION_TYPE == "Insurance", 1, 0)
+total$ORGANIZATION_TYPE_K <- ifelse(total$ORGANIZATION_TYPE == "Kindergarten", 1, 0)
+total$ORGANIZATION_TYPE_LS <- ifelse(total$ORGANIZATION_TYPE == "Legal Services", 1, 0)
+total$ORGANIZATION_TYPE_MD <- ifelse(total$ORGANIZATION_TYPE == "Medicine", 1, 0)
+total$ORGANIZATION_TYPE_MI <- ifelse(total$ORGANIZATION_TYPE == "Military", 1, 0)
+total$ORGANIZATION_TYPE_MO <- ifelse(total$ORGANIZATION_TYPE == "Mobile", 1, 0)
+total$ORGANIZATION_TYPE_O <- ifelse(total$ORGANIZATION_TYPE == "Other", 1, 0)
+total$ORGANIZATION_TYPE_PL <- ifelse(total$ORGANIZATION_TYPE == "Police", 1, 0)
+total$ORGANIZATION_TYPE_PT <- ifelse(total$ORGANIZATION_TYPE == "Postal", 1, 0)
+total$ORGANIZATION_TYPE_RL <- ifelse(total$ORGANIZATION_TYPE == "Realtor", 1, 0)
+total$ORGANIZATION_TYPE_RE <- ifelse(total$ORGANIZATION_TYPE == "Religion", 1, 0)
+total$ORGANIZATION_TYPE_RS <- ifelse(total$ORGANIZATION_TYPE == "Restaurant", 1, 0)
+total$ORGANIZATION_TYPE_SC <- ifelse(total$ORGANIZATION_TYPE == "School", 1, 0)
+total$ORGANIZATION_TYPE_SE <- ifelse(total$ORGANIZATION_TYPE == "Security", 1, 0)
+total$ORGANIZATION_TYPE_SM <- ifelse(total$ORGANIZATION_TYPE == "Security Ministries", 1, 0)
+total$ORGANIZATION_TYPE_SL <- ifelse(total$ORGANIZATION_TYPE == "Self-employed", 1, 0)
+total$ORGANIZATION_TYPE_SV <- ifelse(total$ORGANIZATION_TYPE == "Services", 1, 0)
+total$ORGANIZATION_TYPE_T <- ifelse(total$ORGANIZATION_TYPE == "Telecom", 1, 0)
+total$ORGANIZATION_TYPE_TD1 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 1", 1, 0)
+total$ORGANIZATION_TYPE_TD2 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 2", 1, 0)
+total$ORGANIZATION_TYPE_TD3 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 3", 1, 0)
+total$ORGANIZATION_TYPE_TD4 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 4", 1, 0)
+total$ORGANIZATION_TYPE_TD5 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 5", 1, 0)
+total$ORGANIZATION_TYPE_TD6 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 6", 1, 0)
+total$ORGANIZATION_TYPE_TD7 <- ifelse(total$ORGANIZATION_TYPE == "Trade: type 7", 1, 0)
+total$ORGANIZATION_TYPE_TR1 <- ifelse(total$ORGANIZATION_TYPE == "Transport: type 1", 1, 0)
+total$ORGANIZATION_TYPE_TR2 <- ifelse(total$ORGANIZATION_TYPE == "Transport: type 2", 1, 0)
+total$ORGANIZATION_TYPE_TR3 <- ifelse(total$ORGANIZATION_TYPE == "Transport: type 3", 1, 0)
+total$ORGANIZATION_TYPE_TR4 <- ifelse(total$ORGANIZATION_TYPE == "Transport: type 4", 1, 0)
+total$ORGANIZATION_TYPE_U <- ifelse(total$ORGANIZATION_TYPE == "University", 1, 0)
+```
+Figure B.41 - Categories of ORGANIZATION_TYPE
+Type of organization where client works. Coded into dummy variables.
+
+```{r, echo=FALSE}
+#SummaryStats(EXT_SOURCE_1, data = total)
+missp <- sum(is.na(total$EXT_SOURCE_1)/nrow(total)) #54% missing
+par(mfrow = c(1,2))
+hist(total$EXT_SOURCE_1, col = "blue")
+boxplot(total$EXT_SOURCE_1, col = "blue")
+total$EXT_SOURCE_1 = ifelse(is.na(total$EXT_SOURCE_1), 0, 1)
+#table(total$EXT_SOURCE_1)
+```
+Figure B.42 - EXT_SOURCE_1
+Normalized score from external data source. 54% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(EXT_SOURCE_2, data = total)
+missp <- sum(is.na(total$EXT_SOURCE_2)/nrow(total)) #<1% missing
+par(mfrow = c(1,2))
+MEEN <- mean(total$EXT_SOURCE_2, na.rm=TRUE) 
+total$EXT_SOURCE_2 <- ifelse(is.na(total$EXT_SOURCE_2), MEEN, total$EXT_SOURCE_2)
+hist(total$EXT_SOURCE_2, col = "blue")
+boxplot(total$EXT_SOURCE_2, col = "blue")
+```
+Figure B.43 - EXT_SOURCE_2
+Normalized score from external data source. Less than 1% of values missing. Replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(EXT_SOURCE_3, data = total)
+miss <- sum(is.na(total$EXT_SOURCE_3)/nrow(total)) #<19% missing
+par(mfrow = c(1,2))
+hist(total$EXT_SOURCE_3, col = "blue")
+boxplot(total$EXT_SOURCE_3, col = "blue")
+MEEN <- mean(total$EXT_SOURCE_3, na.rm=TRUE) 
+total$EXT_SOURCE_3 <- ifelse(is.na(total$EXT_SOURCE_3), MEEN, total$EXT_SOURCE_3)
+```
+Figure B.44 - EXT_SOURCE_3
+Normalized score from external data source. 19% of values missing. Replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(APARTMENTS_AVG, data = total)
+miss <- sum(is.na(total$APARTMENTS_AVG)/nrow(total)) #50% of values missing
+total$APARTMENTS_AVG = ifelse(is.na(total$APARTMENTS_AVG), 0, 1)
+table(total$APARTMENTS_AVG)
+```
+Figure B.45 - Distribution of dummy variable APARTMENTS_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor.
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(BASEMENTAREA_AVG, data = total)
+miss <- sum(is.na(total$BASEMENTAREA_AVG)/nrow(total)) #58% of values missing
+total$BASEMENTAREA_AVG = ifelse(is.na(total$BASEMENTAREA_AVG), 0, 1)
+table(total$BASEMENTAREA_AVG)
+```
+Figure B.46 - BASEMENTAREA_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+58% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(YEARS_BEGINEXPLUATATION_AVG, data = total)
+miss <- sum(is.na(total$YEARS_BEGINEXPLUATATION_AVG)/nrow(total)) #48% of values missing
+total$YEARS_BEGINEXPLUATATION_AVG = ifelse(is.na(total$YEARS_BEGINEXPLUATATION_AVG), 0, 1)
+table(total$YEARS_BEGINEXPLUATATION_AVG)
+```
+Figure B.47 - YEARS_BEGINEXPLUATATION_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+48% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(YEARS_BUILD_AVG, data = total)
+miss <- sum(is.na(total$YEARS_BUILD_AVG)/nrow(total)) #66% of values missing
+total$YEARS_BUILD_AVG = ifelse(is.na(total$YEARS_BUILD_AVG), 0, 1)
+table(total$YEARS_BUILD_AVG)
+```
+Figure B.48 - YEARS_BUILD_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+66% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(COMMONAREA_AVG, data = total)
+miss <- sum(is.na(total$COMMONAREA_AVG)/nrow(total)) #69% of values missing
+total$COMMONAREA_AVG = ifelse(is.na(total$COMMONAREA_AVG), 0, 1)
+table(total$COMMONAREA_AVG)
+```
+Figure B.49 - COMMONAREA_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+69% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(ELEVATORS_AVG, data = total)
+miss <- sum(is.na(total$ELEVATORS_AVG)/nrow(total)) #53% of values missing
+total$ELEVATORS_AVG = ifelse(is.na(total$ELEVATORS_AVG), 0, 1)
+table(total$ELEVATORS_AVG)
+```
+Figure B.50 - ELEVATORS_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+53% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(ENTRANCES_AVG, data = total)
+miss <- sum(is.na(total$ENTRANCES_AVG)/nrow(total)) #50% of values missing
+total$ENTRANCES_AVG = ifelse(is.na(total$ENTRANCES_AVG), 0, 1)
+table(total$ENTRANCES_AVG)
+```
+Figure B.51 - ENTRANCES_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+```{r, echo=FALSE}
+#SummaryStats(FLOORSMAX_AVG, data = total)
+miss <- sum(is.na(total$FLOORSMAX_AVG)/nrow(total)) #50% of values missing
+total$FLOORSMAX_AVG = ifelse(is.na(total$FLOORSMAX_AVG), 0, 1)
+table(total$FLOORSMAX_AVG)
+```
+Figure B.52 - FLOORSMAX_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(FLOORSMIN_AVG, data = total)
+miss <- sum(is.na(total$FLOORSMIN_AVG)/nrow(total)) #67% of values missing
+total$FLOORSMIN_AVG = ifelse(is.na(total$FLOORSMIN_AVG), 0, 1)
+table(total$FLOORSMIN_AVG)
+```
+Figure B.53 - FLOORSMIN_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+67% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LANDAREA_AVG, data = total)
+miss <- sum(is.na(total$LANDAREA_AVG)/nrow(total)) #60% of values missing
+total$LANDAREA_AVG = ifelse(is.na(total$LANDAREA_AVG), 0, 1)
+table(total$LANDAREA_AVG)
+```
+Figure B.54 - LANDAREA_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+60% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVINGAPARTMENTS_AVG, data = total)
+miss <- sum(is.na(total$LIVINGAPARTMENTS_AVG)/nrow(total)) #68% of values missing
+total$LIVINGAPARTMENTS_AVG = ifelse(is.na(total$LIVINGAPARTMENTS_AVG), 0, 1)
+table(total$LIVINGAPARTMENTS_AVG)
+```
+Figure B.55 - LIVINGAPARTMENTS_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+68% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+
+```{r, echo=FALSE}
+#SummaryStats(LIVINGAREA_AVG, data = total)
+miss <- sum(is.na(total$LIVINGAREA_AVG)/nrow(total)) #50% of values missing
+total$LIVINGAREA_AVG = ifelse(is.na(total$LIVINGAREA_AVG), 0, 1)
+table(total$LIVINGAREA_AVG)
+```
+Figure B.56 - LIVINGAREA_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(NONLIVINGAPARTMENTS_AVG, data = total)
+miss <- sum(is.na(total$NONLIVINGAPARTMENTS_AVG)/nrow(total)) #50% of values missing
+total$NONLIVINGAPARTMENTS_AVG = ifelse(is.na(total$NONLIVINGAPARTMENTS_AVG), 0, 1)
+table(total$NONLIVINGAPARTMENTS_AVG)
+```
+Figure B.57 - NONLIVINGAPARTMENTS_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(NONLIVINGAREA_AVG, data = total)
+miss <- sum(is.na(total$NONLIVINGAREA_AVG)/nrow(total)) #54% of values missing
+total$NONLIVINGAREA_AVG = ifelse(is.na(total$NONLIVINGAREA_AVG), 0, 1)
+table(total$NONLIVINGAREA_AVG)
+```
+Figure B.58 - NONLIVINGAREA_AVG
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+54% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+```{r, echo=FALSE}
+#SummaryStats(APARTMENTS_MODE, data = total)
+miss <- sum(is.na(total$APARTMENTS_MODE)/nrow(total)) #50% of values missing
+total$APARTMENTS_MODE = ifelse(is.na(total$APARTMENTS_MODE), 0, 1)
+table(total$APARTMENTS_MODE)
+```
+Figure B.59 - APARTMENTS_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(BASEMENTAREA_MODE, data = total)
+miss <- sum(is.na(total$BASEMENTAREA_MODE)/nrow(total)) #58% of values missing
+total$BASEMENTAREA_MODE = ifelse(is.na(total$BASEMENTAREA_MODE), 0, 1)
+table(total$BASEMENTAREA_MODE)
+```
+Figure B.60 - BASEMENTAREA_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+58% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(YEARS_BEGINEXPLUATATION_MODE, data = total)
+miss <- sum(is.na(total$YEARS_BEGINEXPLUATATION_MODE)/nrow(total)) #48% of values missing
+total$YEARS_BEGINEXPLUATATION_MODE = ifelse(is.na(total$YEARS_BEGINEXPLUATATION_MODE), 0, 1)
+table(total$YEARS_BEGINEXPLUATATION_MODE)
+```
+Figure B.61 - YEARS_BEGINEXPLUATATION_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+48% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(YEARS_BUILD_MODE, data = total)
+miss <- sum(is.na(total$YEARS_BUILD_MODE)/nrow(total)) #66% of values missing
+total$YEARS_BUILD_MODE = ifelse(is.na(total$YEARS_BUILD_MODE), 0, 1)
+table(total$YEARS_BUILD_MODE)
+```
+Figure B.62 - YEARS_BUILD_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+66% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(COMMONAREA_MODE, data = total)
+miss <- sum(is.na(total$COMMONAREA_MODE)/nrow(total)) #70% of values missing
+total$COMMONAREA_MODE = ifelse(is.na(total$COMMONAREA_MODE), 0, 1)
+table(total$COMMONAREA_MODE)
+```
+Figure B.63 - COMMONAREA_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+70% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+```{r, echo=FALSE}
+#SummaryStats(ELEVATORS_MODE, data = total)
+miss <- sum(is.na(total$ELEVATORS_MODE)/nrow(total)) #53% of values missing
+total$ELEVATORS_MODE = ifelse(is.na(total$ELEVATORS_MODE), 0, 1)
+table(total$ELEVATORS_MODE)
+```
+Figure B.64 - ELEVATORS_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+53% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(ENTRANCES_MODE, data = total)
+miss <- sum(is.na(total$ENTRANCES_MODE)/nrow(total)) #50% of values missing
+total$ENTRANCES_MODE = ifelse(is.na(total$ENTRANCES_MODE), 0, 1)
+table(total$ENTRANCES_MODE)
+```
+Figure B.65 - ENTRANCES_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(FLOORSMAX_MODE, data = total)
+miss <- sum(is.na(total$FLOORSMAX_MODE)/nrow(total)) #50% of values missing
+total$FLOORSMAX_MODE = ifelse(is.na(total$FLOORSMAX_MODE), 0, 1)
+table(total$FLOORSMAX_MODE)
+```
+Figure B.66 - FLOORSMAX_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+```{r, echo=FALSE}
+#SummaryStats(FLOORSMIN_MODE, data = total)
+miss <- sum(is.na(total$FLOORSMIN_MODE)/nrow(total)) #67% of values missing
+total$FLOORSMIN_MODE = ifelse(is.na(total$FLOORSMIN_MODE), 0, 1)
+table(total$FLOORSMIN_MODE)
+```
+Figure B.67 - FLOORSMIN_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+67% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+```{r, echo=FALSE}
+#SummaryStats(LANDAREA_MODE, data = total)
+miss <- sum(is.na(total$LANDAREA_MODE)/nrow(total)) #60% of values missing
+total$LANDAREA_MODE = ifelse(is.na(total$LANDAREA_MODE), 0, 1)
+table(total$LANDAREA_MODE)
+```
+Figure B.68 - LANDAREA_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+60% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVINGAPARTMENTS_MODE, data = total)
+miss <- sum(is.na(total$LIVINGAPARTMENTS_MODE)/nrow(total)) #68% of values missing
+total$LIVINGAPARTMENTS_MODE = ifelse(is.na(total$LIVINGAPARTMENTS_MODE), 0, 1)
+table(total$LIVINGAPARTMENTS_MODE)
+```
+Figure B.69 - LIVINGAPARTMENTS_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+68% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVINGAREA_MODE, data = total)
+miss <- sum(is.na(total$LIVINGAREA_MODE)/nrow(total)) #50% of values missing
+total$LIVINGAREA_MODE = ifelse(is.na(total$LIVINGAREA_MODE), 0, 1)
+table(total$LIVINGAREA_MODE)
+```
+Figure B.70 - LIVINGAREA_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(NONLIVINGAPARTMENTS_MODE, data = total)
+miss <- sum(is.na(total$NONLIVINGAPARTMENTS_MODE)/nrow(total)) #70% of values missing
+total$NONLIVINGAPARTMENTS_MODE = ifelse(is.na(total$NONLIVINGAPARTMENTS_MODE), 0, 1)
+table(total$NONLIVINGAPARTMENTS_MODE)
+```
+Figure B.71 - NONLIVINGAPARTMENTS_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+70% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(NONLIVINGAREA_MODE, data = total)
+miss <- sum(is.na(total$NONLIVINGAREA_MODE)/nrow(total)) #55% of values missing
+total$NONLIVINGAREA_MODE = ifelse(is.na(total$NONLIVINGAREA_MODE), 0, 1)
+table(total$NONLIVINGAREA_MODE)
+```
+Figure B.72 - Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+55% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(APARTMENTS_MEDI, data = total)
+miss <- sum(is.na(total$APARTMENTS_MEDI)/nrow(total)) #50% of values missing
+total$APARTMENTS_MEDI = ifelse(is.na(total$APARTMENTS_MEDI), 0, 1)
+table(total$APARTMENTS_MEDI)
+```
+Figure B.73 - APARTMENTS_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+
+```{r, echo=FALSE}
+#SummaryStats(BASEMENTAREA_MEDI, data = total)
+miss <- sum(is.na(total$BASEMENTAREA_MEDI)/nrow(total)) #58% of values missing
+total$BASEMENTAREA_MEDI = ifelse(is.na(total$BASEMENTAREA_MEDI), 0, 1)
+table(total$BASEMENTAREA_MEDI)
+```
+Figure B.74 - BASEMENTAREA_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+58% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(YEARS_BEGINEXPLUATATION_MEDI, data = total)
+miss <- sum(is.na(total$YEARS_BEGINEXPLUATATION_MEDI)/nrow(total)) #48% of values missing
+total$YEARS_BEGINEXPLUATATION_MEDI = ifelse(is.na(total$YEARS_BEGINEXPLUATATION_MEDI), 0, 1)
+table(total$YEARS_BEGINEXPLUATATION_MEDI)
+```
+Figure B.75 - YEARS_BEGINEXPLUATATION_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+48% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(YEARS_BUILD_MEDI, data = total)
+miss <- sum(is.na(total$YEARS_BUILD_MEDI)/nrow(total)) #66% of values missing
+total$YEARS_BUILD_MEDI = ifelse(is.na(total$YEARS_BUILD_MEDI), 0, 1)
+table(total$YEARS_BUILD_MEDI)
+```
+Figure B.76 - YEARS_BUILD_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+66% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(COMMONAREA_MEDI, data = total)
+miss <- sum(is.na(total$COMMONAREA_MEDI)/nrow(total)) #69% of values missing
+total$COMMONAREA_MEDI = ifelse(is.na(total$COMMONAREA_MEDI), 0, 1)
+table(total$COMMONAREA_MEDI)
+```
+Figure B.77 - COMMONAREA_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+69% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(ELEVATORS_MEDI, data = total)
+miss <- sum(is.na(total$ELEVATORS_MEDI)/nrow(total)) #53% of values missing
+total$ELEVATORS_MEDI = ifelse(is.na(total$ELEVATORS_MEDI), 0, 1)
+table(total$ELEVATORS_MEDI)
+```
+Figure B.78 - ELEVATORS_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+53% of values missing. Chose to change to dummy varaible if score available (1)
+
+
+```{r, echo=FALSE}
+#SummaryStats(ENTRANCES_MEDI, data = total)
+miss <- sum(is.na(total$ENTRANCES_MEDI)/nrow(total)) #50% of values missing
+total$ENTRANCES_MEDI = ifelse(is.na(total$ENTRANCES_MEDI), 0, 1)
+table(total$ENTRANCES_MEDI)
+```
+Figure B.79 - ENTRANCES_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(FLOORSMAX_MEDI, data = total)
+miss <- sum(is.na(total$FLOORSMAX_MEDI)/nrow(total)) #50% of values missing
+total$FLOORSMAX_MEDI = ifelse(is.na(total$FLOORSMAX_MEDI), 0, 1)
+table(total$FLOORSMAX_MEDI)
+```
+Figure B.80 - FLOORSMAX_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(FLOORSMIN_MEDI, data = total)
+miss <- sum(is.na(total$FLOORSMIN_MEDI)/nrow(total)) #67% of values missing
+total$FLOORSMIN_MEDI = ifelse(is.na(total$FLOORSMIN_MEDI), 0, 1)
+table(total$FLOORSMIN_MEDI)
+```
+Figure B.81 - FLOORSMIN_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+67% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LANDAREA_MEDI, data = total)
+miss <- sum(is.na(total$LANDAREA_MEDI)/nrow(total)) #59% of values missing
+total$LANDAREA_MEDI = ifelse(is.na(total$LANDAREA_MEDI), 0, 1)
+table(total$LANDAREA_MEDI)
+```
+Figure B.82 - LANDAREA_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+59% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVINGAPARTMENTS_MEDI, data = total)
+miss <- sum(is.na(total$LIVINGAPARTMENTS_MEDI)/nrow(total)) #68% of values missing
+total$LIVINGAPARTMENTS_MEDI = ifelse(is.na(total$LIVINGAPARTMENTS_MEDI), 0, 1)
+table(total$LIVINGAPARTMENTS_MEDI)
+```
+Figure B.83 - LIVINGAPARTMENTS_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+68% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(LIVINGAREA_MEDI, data = total)
+miss <- sum(is.na(total$LIVINGAREA_MEDI)/nrow(total)) #50% of values missing
+total$LIVINGAREA_MEDI = ifelse(is.na(total$LIVINGAREA_MEDI), 0, 1)
+table(total$LIVINGAREA_MEDI)
+```
+Figure B.84 - LIVINGAREA_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+50% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(NONLIVINGAPARTMENTS_MEDI, data = total)
+miss <- sum(is.na(total$NONLIVINGAPARTMENTS_MEDI)/nrow(total)) #69% of values missing
+total$NONLIVINGAPARTMENTS_MEDI = ifelse(is.na(total$NONLIVINGAPARTMENTS_MEDI), 0, 1)
+table(total$NONLIVINGAPARTMENTS_MEDI)
+```
+Figure B.85 - NONLIVINGAPARTMENTS_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+69% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+#SummaryStats(NONLIVINGAREA_MEDI, data = total)
+miss <- sum(is.na(total$NONLIVINGAREA_MEDI)/nrow(total)) #54% of values missing
+total$NONLIVINGAREA_MEDI = ifelse(is.na(total$NONLIVINGAREA_MEDI), 0, 1)
+table(total$NONLIVINGAREA_MEDI)
+```
+Figure B.86 - NONLIVINGAREA_MEDI
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+54% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+SummaryStats(FONDKAPREMONT_MODE, data = total)
+miss <- sum(is.na(total$FONDKAPREMONT_MODE)/nrow(total)) #0
+total$FONDKAPREMONT_MODE_OSA <- ifelse(total$FONDKAPREMONT_MODE == "org spec account", 1, 0)
+total$FONDKAPREMONT_MODE_ROA <- ifelse(total$FONDKAPREMONT_MODE == "reg oper account", 1, 0)
+total$FONDKAPREMONT_MODE_ROS <- ifelse(total$FONDKAPREMONT_MODE == "reg oper spec account", 1, 0)
+```
+Figure B.87 - FONDKAPREMONT_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+Four levels tranformed into 3 dummy variables.
+
+```{r, echo=FALSE}
+SummaryStats(HOUSETYPE_MODE, data = total) #0 missing
+total$HOUSETYPE_MODE_F <- ifelse(total$HOUSETYPE_MODE == "block of flats", 1, 0)
+total$HOUSETYPE_MODE_H <- ifelse(total$HOUSETYPE_MODE == "specific housing", 1, 0)
+```
+
+Figure B.88 - HOUSETYPE_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+Three levels coded into two dummy variables.
+
+```{r, echo=FALSE}
+#SummaryStats(TOTALAREA_MODE, data = total)
+miss <- sum(is.na(total$TOTALAREA_MODE)/nrow(total)) #48% of values missing
+total$TOTALAREA_MODE = ifelse(is.na(total$TOTALAREA_MODE), 0, 1)
+table(total$TOTALAREA_MODE)
+```
+Figure B.89 - TOTALAREA_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+48% of values missing. Chose to change to dummy varaible if score available (1)
+
+```{r, echo=FALSE}
+SummaryStats(WALLSMATERIAL_MODE, data = total) #0 missing
+total$WALLSMATERIAL_MODE_B <- ifelse(total$WALLSMATERIAL_MODE == "Block", 1, 0)
+total$WALLSMATERIAL_MODE_M <- ifelse(total$WALLSMATERIAL_MODE == "Mixed", 1, 0)
+total$WALLSMATERIAL_MODE_MO <- ifelse(total$WALLSMATERIAL_MODE == "Monolithic", 1, 0)
+total$WALLSMATERIAL_MODE_O <- ifelse(total$WALLSMATERIAL_MODE == "Others", 1, 0)
+total$WALLSMATERIAL_MODE_P <- ifelse(total$WALLSMATERIAL_MODE == "Panel", 1, 0)
+total$WALLSMATERIAL_MODE_SB <- ifelse(total$WALLSMATERIAL_MODE == "Stone, brick", 1, 0)
+```
+Figure B.90 - WALLSMATERIAL_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+7 levels turned into 6 dummy variables. 
+
+
+```{r, echo=FALSE}
+SummaryStats(EMERGENCYSTATE_MODE, data = total) #0 missing
+total$EMERGENCYSTATE_MODE <- ifelse(total$EMERGENCYSTATE_MODE == "Yes", 1, 0)
+```
+Figure B.91 - EMERGENCYSTATE_MODE
+Normalized information about building where the client lives, What is average (_AVG suffix), modus (_MODE suffix), median (_MEDI suffix) apartment size, common area, living area, age of building, number of elevators, number of entrances, state of the building, number of floor
+Coded as dummy variable (1=YES, 0=NO)
+
+```{r, echo=FALSE}
+#SummaryStats(OBS_30_CNT_SOCIAL_CIRCLE, data = total)
+missp <- sum(is.na(total$OBS_30_CNT_SOCIAL_CIRCLE)/nrow(total)) #<1% 
+par(mfrow = c(1,2))
+total$OBS_30_CNT_SOCIAL_CIRCLE <- ifelse(total$OBS_30_CNT_SOCIAL_CIRCLE > 300, NA, total$OBS_30_CNT_SOCIAL_CIRCLE)
+MEEN <- mean(total$OBS_30_CNT_SOCIAL_CIRCLE, na.rm=TRUE) 
+total$OBS_30_CNT_SOCIAL_CIRCLE <- ifelse(is.na(total$OBS_30_CNT_SOCIAL_CIRCLE), MEEN, total$OBS_30_CNT_SOCIAL_CIRCLE)
+hist(total$OBS_30_CNT_SOCIAL_CIRCLE, col = "blue")
+boxplot(total$OBS_30_CNT_SOCIAL_CIRCLE, col = "blue")
+```
+Figure B.92 - OBS_30_CNT_SOCIAL_CIRCLE
+How many observation of client's social surroundings with observable 30 DPD (days past due) default
+Appears to be outliers above 50. Given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(DEF_30_CNT_SOCIAL_CIRCLE, data = total)
+missp <- sum(is.na(total$DEF_30_CNT_SOCIAL_CIRCLE)/nrow(total)) #<1% 
+par(mfrow = c(1,2))
+total$DEF_30_CNT_SOCIAL_CIRCLE <- ifelse(total$DEF_30_CNT_SOCIAL_CIRCLE > 30, NA, total$DEF_30_CNT_SOCIAL_CIRCLE)
+MEEN <- mean(total$DEF_30_CNT_SOCIAL_CIRCLE, na.rm=TRUE) 
+total$DEF_30_CNT_SOCIAL_CIRCLE <- ifelse(is.na(total$DEF_30_CNT_SOCIAL_CIRCLE), MEEN, total$DEF_30_CNT_SOCIAL_CIRCLE)
+hist(total$DEF_30_CNT_SOCIAL_CIRCLE, col = "blue")
+boxplot(total$DEF_30_CNT_SOCIAL_CIRCLE, col = "blue")
+```
+Figure B.93 - DEF_30_CNT_SOCIAL_CIRCLE
+How many observation of client's social surroundings defaulted on 30 DPD (days past due) 
+Appears to be outlier above 30. Given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(OBS_60_CNT_SOCIAL_CIRCLE, data = total)
+missp <- sum(is.na(total$OBS_60_CNT_SOCIAL_CIRCLE)/nrow(total)) #<1% 
+par(mfrow = c(1,2))
+total$OBS_60_CNT_SOCIAL_CIRCLE <- ifelse(total$OBS_60_CNT_SOCIAL_CIRCLE > 300, NA, total$OBS_60_CNT_SOCIAL_CIRCLE)
+MEEN <- mean(total$OBS_60_CNT_SOCIAL_CIRCLE, na.rm=TRUE) 
+total$OBS_60_CNT_SOCIAL_CIRCLE <- ifelse(is.na(total$OBS_60_CNT_SOCIAL_CIRCLE), MEEN, total$OBS_60_CNT_SOCIAL_CIRCLE)
+hist(total$OBS_60_CNT_SOCIAL_CIRCLE, col = "blue")
+boxplot(total$OBS_60_CNT_SOCIAL_CIRCLE, col = "blue")
+```
+Figure B.94 - OBS_60_CNT_SOCIAL_CIRCLE
+How many observation of client's social surroundings with observable 60 DPD (days past due) default
+Outliers above 300 given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(DEF_60_CNT_SOCIAL_CIRCLE, data = total)
+missp <- sum(is.na(total$DEF_60_CNT_SOCIAL_CIRCLE)/nrow(total)) #<1% 
+par(mfrow = c(1,2))
+total$DEF_60_CNT_SOCIAL_CIRCLE <- ifelse(total$DEF_60_CNT_SOCIAL_CIRCLE > 30, NA, total$DEF_60_CNT_SOCIAL_CIRCLE)
+MEEN <- mean(total$DEF_60_CNT_SOCIAL_CIRCLE, na.rm=TRUE) 
+total$DEF_60_CNT_SOCIAL_CIRCLE <- ifelse(is.na(total$DEF_60_CNT_SOCIAL_CIRCLE), MEEN, total$DEF_60_CNT_SOCIAL_CIRCLE)
+hist(total$DEF_60_CNT_SOCIAL_CIRCLE, col = "blue")
+boxplot(total$DEF_60_CNT_SOCIAL_CIRCLE, col = "blue")
+```
+Figure B.95 - DEF_60_CNT_SOCIAL_CIRCLE
+How many observation of client's social surroundings defaulted on 60 (days past due) DPD
+Missing values replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(DAYS_LAST_PHONE_CHANGE, data = total) #1 missing value
+par(mfrow = c(1,2))
+hist(total$DAYS_LAST_PHONE_CHANGE, col = "blue")
+boxplot(total$DAYS_LAST_PHONE_CHANGE, col = "blue")
+MEEN <- mean(total$DAYS_LAST_PHONE_CHANGE, na.rm=TRUE) 
+total$DAYS_LAST_PHONE_CHANGE <- ifelse(is.na(total$DAYS_LAST_PHONE_CHANGE), MEEN, total$DAYS_LAST_PHONE_CHANGE)
+```
+Figure B.96 - DAYS_LAST_PHONE_CHANGE
+How many days before application did client change phone, max is 11 years since last phone change.
+1 missing value replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_2, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_2)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_2))
+mosaicplot(total$FLAG_DOCUMENT_2 ~ total$TARGET, main="FLAG_DOCUMENT_2", color=TRUE, 
+xlab="FLAG_DOCUMENT_2", ylab="TARGET")
+```
+Figure B.97 - FLAG_DOCUMENT_2
+Did client provide document 2
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_3, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_3)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_3))
+mosaicplot(total$FLAG_DOCUMENT_3 ~ total$TARGET, main="FLAG_DOCUMENT_3", color=TRUE, 
+xlab="FLAG_DOCUMENT_3", ylab="TARGET")
+```
+Figure B.98 - FLAG_DOCUMENT_3
+Did client provide document 3
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_4, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_4)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_4))
+mosaicplot(total$FLAG_DOCUMENT_4 ~ total$TARGET, main="FLAG_DOCUMENT_4", color=TRUE, 
+xlab="FLAG_DOCUMENT_4", ylab="TARGET")
+```
+Figure B.99 - FLAG_DOCUMENT_4
+Did client provide document 4
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_5, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_5)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_5))
+mosaicplot(total$FLAG_DOCUMENT_5 ~ total$TARGET, main="FLAG_DOCUMENT_5", color=TRUE, 
+xlab="FLAG_DOCUMENT_5", ylab="TARGET")
+```
+Figure B.100 - FLAG_DOCUMENT_5
+Did client provide document 5
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_6, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_6)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_6))
+mosaicplot(total$FLAG_DOCUMENT_6 ~ total$TARGET, main="FLAG_DOCUMENT_6", color=TRUE, 
+xlab="FLAG_DOCUMENT_6", ylab="TARGET")
+```
+Figure B.101 - FLAG_DOCUMENT_6
+Did client provide document 6
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_7, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_7)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_7))
+mosaicplot(total$FLAG_DOCUMENT_7 ~ total$TARGET, main="FLAG_DOCUMENT_7", color=TRUE, 
+xlab="FLAG_DOCUMENT_7", ylab="TARGET")
+```
+Figure B.102 - FLAG_DOCUMENT_7
+Did client provide document 7
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_8, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_8)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_8))
+mosaicplot(total$FLAG_DOCUMENT_8 ~ total$TARGET, main="FLAG_DOCUMENT_8", color=TRUE, 
+xlab="FLAG_DOCUMENT_8", ylab="TARGET")
+```
+Figure B.103 - FLAG_DOCUMENT_8
+Did client provide document 8
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_9, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_9)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_9))
+mosaicplot(total$FLAG_DOCUMENT_9 ~ total$TARGET, main="FLAG_DOCUMENT_9", color=TRUE, 
+xlab="FLAG_DOCUMENT_9", ylab="TARGET")
+```
+Figure B.104 - FLAG_DOCUMENT_9
+Did client provide document 9
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_10, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_10)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_10))
+mosaicplot(total$FLAG_DOCUMENT_10 ~ total$TARGET, main="FLAG_DOCUMENT_10", color=TRUE, 
+xlab="FLAG_DOCUMENT_10", ylab="TARGET")
+```
+Figure B.105 - FLAG_DOCUMENT_10
+Did client provide document 10
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_11, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_11)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_11))
+mosaicplot(total$FLAG_DOCUMENT_11 ~ total$TARGET, main="FLAG_DOCUMENT_11", color=TRUE, 
+xlab="FLAG_DOCUMENT_11", ylab="TARGET")
+```
+Figure B.106 - FLAG_DOCUMENT_11
+Did client provide document 11
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_12, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_12)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_12))
+mosaicplot(total$FLAG_DOCUMENT_12 ~ total$TARGET, main="FLAG_DOCUMENT_12", color=TRUE, 
+xlab="FLAG_DOCUMENT_12", ylab="TARGET")
+```
+Figure B.107 - FLAG_DOCUMENT_12
+Did client provide document 12
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_13, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_13)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_13))
+mosaicplot(total$FLAG_DOCUMENT_13 ~ total$TARGET, main="FLAG_DOCUMENT_13", color=TRUE, 
+xlab="FLAG_DOCUMENT_13", ylab="TARGET")
+```
+Figure B.108 - FLAG_DOCUMENT_13
+Did client provide document 13
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_14, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_14)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_14))
+mosaicplot(total$FLAG_DOCUMENT_14 ~ total$TARGET, main="FLAG_DOCUMENT_14", color=TRUE, 
+xlab="FLAG_DOCUMENT_14", ylab="TARGET")
+```
+Figure B.109 - FLAG_DOCUMENT_14
+Did client provide document 14
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_15, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_15)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_15))
+mosaicplot(total$FLAG_DOCUMENT_15 ~ total$TARGET, main="FLAG_DOCUMENT_15", color=TRUE, 
+xlab="FLAG_DOCUMENT_15", ylab="TARGET")
+```
+Figure B.110 - FLAG_DOCUMENT_15
+Did client provide document 15
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_16, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_16)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_16))
+mosaicplot(total$FLAG_DOCUMENT_16 ~ total$TARGET, main="FLAG_DOCUMENT_16", color=TRUE, 
+xlab="FLAG_DOCUMENT_16", ylab="TARGET")
+```
+Figure B.111 - FLAG_DOCUMENT_16
+Did client provide document 16
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_17, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_17)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_17))
+mosaicplot(total$FLAG_DOCUMENT_17 ~ total$TARGET, main="FLAG_DOCUMENT_17", color=TRUE, 
+xlab="FLAG_DOCUMENT_17", ylab="TARGET")
+```
+Figure B.112 - FLAG_DOCUMENT_17
+Did client provide document 17
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_18, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_18)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_18))
+mosaicplot(total$FLAG_DOCUMENT_18 ~ total$TARGET, main="FLAG_DOCUMENT_18", color=TRUE, 
+xlab="FLAG_DOCUMENT_18", ylab="TARGET")
+```
+Figure B.113 - FLAG_DOCUMENT_18
+Did client provide document 18
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_19, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_19)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_19))
+mosaicplot(total$FLAG_DOCUMENT_19 ~ total$TARGET, main="FLAG_DOCUMENT_19", color=TRUE, 
+xlab="FLAG_DOCUMENT_19", ylab="TARGET")
+```
+Figure B.114 - FLAG_DOCUMENT_19
+Did client provide document 19
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_20, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_20)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_20))
+mosaicplot(total$FLAG_DOCUMENT_20 ~ total$TARGET, main="FLAG_DOCUMENT_20", color=TRUE, 
+xlab="FLAG_DOCUMENT_20", ylab="TARGET")
+```
+Figure B.115 - FLAG_DOCUMENT_20
+Did client provide document 20
+
+```{r, echo=FALSE}
+#SummaryStats(FLAG_DOCUMENT_21, data = total)
+missp <- sum(is.na(total$FLAG_DOCUMENT_21)/nrow(total)) #0
+par(mfrow=c(1,2))
+barplot(table(total$FLAG_DOCUMENT_21))
+mosaicplot(total$FLAG_DOCUMENT_21 ~ total$TARGET, main="FLAG_DOCUMENT_21", color=TRUE, 
+xlab="FLAG_DOCUMENT_21", ylab="TARGET")
+```
+Figure B.116 - FLAG_DOCUMENT_21
+Did client provide document 21
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_REQ_CREDIT_BUREAU_HOUR, data = total)
+missp <- sum(is.na(total$AMT_REQ_CREDIT_BUREAU_HOUR)/nrow(total)) #13% 
+par(mfrow = c(1,2))
+MEEN <- mean(total$AMT_REQ_CREDIT_BUREAU_HOUR, na.rm=TRUE)
+total$AMT_REQ_CREDIT_BUREAU_HOUR <- ifelse(is.na(total$AMT_REQ_CREDIT_BUREAU_HOUR), MEEN, total$AMT_REQ_CREDIT_BUREAU_HOUR)
+hist(total$AMT_REQ_CREDIT_BUREAU_HOUR, col = "blue")
+boxplot(total$AMT_REQ_CREDIT_BUREAU_HOUR, col = "blue")
+```
+Figure B.117 - AMT_REQ_CREDIT_BUREAU_HOUR
+Number of enquiries to Credit Bureau about the client one hour before application
+13% missing values. Values given mean value.
+
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_REQ_CREDIT_BUREAU_DAY, data = total)
+missp <- sum(is.na(total$AMT_REQ_CREDIT_BUREAU_DAY)/nrow(total)) #13% 
+MEEN <- mean(total$AMT_REQ_CREDIT_BUREAU_DAY, na.rm=TRUE) 
+total$AMT_REQ_CREDIT_BUREAU_DAY <- ifelse(is.na(total$AMT_REQ_CREDIT_BUREAU_DAY), MEEN, total$AMT_REQ_CREDIT_BUREAU_DAY)
+par(mfrow = c(1,2))
+hist(total$AMT_REQ_CREDIT_BUREAU_DAY, col = "blue")
+boxplot(total$AMT_REQ_CREDIT_BUREAU_DAY, col = "blue")
+```
+Figure B.118 - AMT_REQ_CREDIT_BUREAU_DAY
+Number of enquiries to Credit Bureau about the client one day before application (excluding one hour before application)
+13% missing values. Values given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_REQ_CREDIT_BUREAU_WEEK, data = total)
+missp <- sum(is.na(total$AMT_REQ_CREDIT_BUREAU_WEEK)/nrow(total)) #13% 
+MEEN <- mean(total$AMT_REQ_CREDIT_BUREAU_WEEK, na.rm=TRUE) 
+total$AMT_REQ_CREDIT_BUREAU_WEEK <- ifelse(is.na(total$AMT_REQ_CREDIT_BUREAU_WEEK), MEEN, total$AMT_REQ_CREDIT_BUREAU_WEEK)
+par(mfrow = c(1,2))
+hist(total$AMT_REQ_CREDIT_BUREAU_WEEK, col = "blue")
+boxplot(total$AMT_REQ_CREDIT_BUREAU_WEEK, col = "blue")
+```
+Figure B.119 - AMT_REQ_CREDIT_BUREAU_WEEK
+Number of enquiries to Credit Bureau about the client one week before application (excluding one day before application)
+13% missing values. Values given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_REQ_CREDIT_BUREAU_MON, data = total)
+missp <- sum(is.na(total$AMT_REQ_CREDIT_BUREAU_MON)/nrow(total)) #13% 
+MEEN <- mean(total$AMT_REQ_CREDIT_BUREAU_MON, na.rm=TRUE) 
+total$AMT_REQ_CREDIT_BUREAU_MON <- ifelse(is.na(total$AMT_REQ_CREDIT_BUREAU_MON), MEEN, total$AMT_REQ_CREDIT_BUREAU_MON)
+par(mfrow = c(1,2))
+hist(total$AMT_REQ_CREDIT_BUREAU_MON, col = "blue")
+boxplot(total$AMT_REQ_CREDIT_BUREAU_MON, col = "blue")
+```
+Figure B.120 - AMT_REQ_CREDIT_BUREAU_MON
+Number of enquiries to Credit Bureau about the client one month before application (excluding one week before application)
+13% missing values. Values given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_REQ_CREDIT_BUREAU_QRT, data = total)
+missp <- sum(is.na(total$AMT_REQ_CREDIT_BUREAU_QRT)/nrow(total)) #13% 
+total$AMT_REQ_CREDIT_BUREAU_QRT <- ifelse(total$AMT_REQ_CREDIT_BUREAU_QRT > 50, NA, total$AMT_REQ_CREDIT_BUREAU_QRT)
+MEEN <- mean(total$AMT_REQ_CREDIT_BUREAU_QRT, na.rm=TRUE) 
+total$AMT_REQ_CREDIT_BUREAU_QRT <- ifelse(is.na(total$AMT_REQ_CREDIT_BUREAU_QRT), MEEN, total$AMT_REQ_CREDIT_BUREAU_QRT)
+par(mfrow = c(1,2))
+hist(total$AMT_REQ_CREDIT_BUREAU_QRT, col = "blue")
+boxplot(total$AMT_REQ_CREDIT_BUREAU_QRT, col = "blue")
+```
+Figure B.121 - AMT_REQ_CREDIT_BUREAU_QRT
+Number of enquiries to Credit Bureau about the client 3 month before application (excluding one month before application)
+Appears to be one outlier of 250. Given NA value, 13% NA values were replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_REQ_CREDIT_BUREAU_YEAR, data = total)
+missp <- sum(is.na(total$AMT_REQ_CREDIT_BUREAU_YEAR)/nrow(total)) #13% 
+MEEN <- mean(total$AMT_REQ_CREDIT_BUREAU_YEAR, na.rm=TRUE) 
+total$AMT_REQ_CREDIT_BUREAU_YEAR <- ifelse(is.na(total$AMT_REQ_CREDIT_BUREAU_YEAR), MEEN, total$AMT_REQ_CREDIT_BUREAU_YEAR)
+par(mfrow = c(1,2))
+hist(total$AMT_REQ_CREDIT_BUREAU_YEAR, col = "blue")
+boxplot(total$AMT_REQ_CREDIT_BUREAU_YEAR, col = "blue")
+```
+Figure B.122 - AMT_REQ_CREDIT_BUREAU_YEAR
+13% missing values. Values given mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(MAX_DAYS_CREDIT, data = total)
+missp <- sum(is.na(total$MAX_DAYS_CREDIT)/nrow(total)) #14% 
+MEEN <- mean(total$MAX_DAYS_CREDIT, na.rm=TRUE) 
+total$MAX_DAYS_CREDIT <- ifelse(is.na(total$MAX_DAYS_CREDIT), MEEN, total$MAX_DAYS_CREDIT)
+par(mfrow = c(1,2))
+hist(total$MAX_DAYS_CREDIT, col = "blue")
+boxplot(total$MAX_DAYS_CREDIT, col = "blue")
+```
+Figure B.123 - MAX_DAYS_CREDIT
+Bureau table. Absolute value. How many days before current application did client apply for Credit Bureau credit. 14% of values missing, replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(CREDIT_DAY_OVERDUE, data = total)
+missp <- sum(is.na(total$CREDIT_DAY_OVERDUE)/nrow(total)) #14% 
+MEEN <- mean(total$CREDIT_DAY_OVERDUE, na.rm=TRUE) 
+total$CREDIT_DAY_OVERDUE <- ifelse(is.na(total$CREDIT_DAY_OVERDUE), MEEN, total$CREDIT_DAY_OVERDUE)
+par(mfrow = c(1,2))
+hist(total$CREDIT_DAY_OVERDUE, col = "blue")
+boxplot(total$CREDIT_DAY_OVERDUE, col = "blue")
+```
+Figure B.124 - CREDIT_DAY_OVERDUE
+Max is 13 years overdue.
+
+```{r, echo=FALSE}
+#SummaryStats(CREDIT_CLOSED, data = total)
+missp <- sum(is.na(total$CREDIT_CLOSED)/nrow(total)) #14% 
+MEEN <- mean(total$CREDIT_CLOSED, na.rm=TRUE) 
+total$CREDIT_CLOSED <- ifelse(is.na(total$CREDIT_CLOSED), MEEN, total$CREDIT_CLOSED)
+par(mfrow = c(1,2))
+hist(total$CREDIT_CLOSED, col = "blue")
+boxplot(total$CREDIT_CLOSED, col = "blue")
+```
+Figure B.125 - CREDIT_CLOSED
+
+```{r, echo=FALSE}
+#SummaryStats(CREDIT_ACTIVE, data = total)
+missp <- sum(is.na(total$CREDIT_ACTIVE)/nrow(total)) #14% 
+MEEN <- mean(total$CREDIT_ACTIVE, na.rm=TRUE) 
+total$CREDIT_ACTIVE <- ifelse(is.na(total$CREDIT_ACTIVE), MEEN, total$CREDIT_ACTIVE)
+par(mfrow = c(1,2))
+hist(total$CREDIT_ACTIVE, col = "blue")
+boxplot(total$CREDIT_ACTIVE, col = "blue")
+```
+Figure B.126 - CREDIT_ACTIVE
+
+```{r, echo=FALSE}
+#SummaryStats(NCreditCard, data = total)
+missp <- sum(is.na(total$NCreditCard)/nrow(total)) #0% 
+MEEN <- mean(total$NCreditCard, na.rm=TRUE) 
+total$NCreditCard <- ifelse(is.na(total$NCreditCard), MEEN, total$NCreditCard)
+par(mfrow = c(1,2))
+hist(total$NCreditCard, col = "blue")
+boxplot(total$NCreditCard, col = "blue")
+```
+Figure B.127 - NCreditCard
+
+```{r, echo=FALSE}
+#SummaryStats(CNT_INSTALMENT, data = total)
+missp <- sum(is.na(total$CNT_INSTALMENT)/nrow(total)) #5% 
+MEEN <- mean(total$CNT_INSTALMENT, na.rm=TRUE) 
+total$CNT_INSTALMENT <- ifelse(is.na(total$CNT_INSTALMENT), MEEN, total$CNT_INSTALMENT)
+par(mfrow = c(1,2))
+hist(total$CNT_INSTALMENT, col = "blue")
+boxplot(total$CNT_INSTALMENT, col = "blue")
+```
+Figure B.128 - CNT_INSTALMENT
+5% missing values, replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(CNT_INSTALMENT_FUTURE, data = total)
+missp <- sum(is.na(total$CNT_INSTALMENT_FUTURE)/nrow(total)) #5% 
+MEEN <- mean(total$CNT_INSTALMENT_FUTURE, na.rm=TRUE) 
+total$CNT_INSTALMENT_FUTURE <- ifelse(is.na(total$CNT_INSTALMENT_FUTURE), MEEN, total$CNT_INSTALMENT_FUTURE)
+par(mfrow = c(1,2))
+hist(total$CNT_INSTALMENT_FUTURE, col = "blue")
+boxplot(total$CNT_INSTALMENT_FUTURE, col = "blue")
+```
+Figure B.129 - CNT_INSTALMENT_FUTURE
+5% missing values, replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(NPosCash, data = total)
+missp <- sum(is.na(total$NPosCash)/nrow(total)) #5% 
+MEEN <- mean(total$NPosCash, na.rm=TRUE) 
+total$NPosCash <- ifelse(is.na(total$NPosCash), MEEN, total$NPosCash)
+par(mfrow = c(1,2))
+hist(total$NPosCash, col = "blue")
+boxplot(total$NPosCash, col = "blue")
+```
+Figure B.130 - NPosCash
+5% missing values, replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(Active, data = total)
+missp <- sum(is.na(total$Active)/nrow(total)) #5% 
+MEEN <- mean(total$Active, na.rm=TRUE) 
+total$Active <- ifelse(is.na(total$Active), MEEN, total$Active)
+par(mfrow = c(1,2))
+hist(total$Active, col = "blue")
+boxplot(total$Active, col = "blue")
+```
+Figure B.131 - Active
+5% missing values, replaced with mean value.
+
+```{r, echo=FALSE}
+missp <- sum(is.na(total$'Amortized debt')/nrow(total)) #5%
+MEEN <- mean(total$'Amortized debt', na.rm=TRUE) 
+total$'Amortized debt' <- ifelse(is.na(total$'Amortized debt'), MEEN, total$'Amortized debt')
+par(mfrow = c(1,2))
+hist(total$'Amortized debt', col = "blue")
+boxplot(total$'Amortized debt', col = "blue")
+```
+Figure B.132 - Amortized debt
+5% missing values, replaced with mean value.
+
+```{r, echo=FALSE}
+#SummaryStats(Approved.x, data = total)
+missp <- sum(is.na(total$Approved.x)/nrow(total)) #5%
+MEEN <- mean(total$Approved.x, na.rm=TRUE) 
+total$Approved.x <- ifelse(is.na(total$Approved.x), MEEN, total$Approved.x)
+par(mfrow = c(1,2))
+hist(total$Approved.x, col = "blue")
+boxplot(total$Approved.x, col = "blue")
+```
+Figure B.133 - Approved
+
+```{r, echo=FALSE}
+#SummaryStats(Canceled.x, data = total)
+missp <- sum(is.na(total$Canceled.x)/nrow(total)) #5%
+total$Canceled.x <- ifelse(is.na(total$Canceled.x), 0 , total$Canceled.x)
+par(mfrow = c(1,2))
+hist(total$Canceled.x, col = "blue")
+boxplot(total$Canceled.x, col = "blue")
+```
+Figure B.134 - Canceled
+
+
+```{r, echo=FALSE}
+#SummaryStats(Completed, data = total)
+missp <- sum(is.na(total$Completed)/nrow(total)) #5%
+MEEN <- mean(total$Completed, na.rm=TRUE) 
+total$Completed <- ifelse(is.na(total$Completed), MEEN , total$Completed)
+par(mfrow = c(1,2))
+hist(total$Completed, col = "blue")
+boxplot(total$Completed, col = "blue")
+```
+Figure B.135 - Completed
+
+
+```{r, echo=FALSE}
+#SummaryStats(Demand, data = total)
+missp <- sum(is.na(total$Demand)/nrow(total)) #5%
+MEEN <- mean(total$Demand, na.rm=TRUE) 
+total$Demand <- ifelse(is.na(total$Demand), 0 , total$Demand)
+par(mfrow = c(1,2))
+hist(total$Demand, col = "blue")
+boxplot(total$Demand, col = "blue")
+```
+Figure B.136 - Demand
+
+```{r, echo=FALSE}
+#SummaryStats('Returned to the store', data = total)
+missp <- sum(is.na(total$'Returned to the store')/nrow(total)) #5%
+MEEN <- mean(total$'Returned to the store', na.rm=TRUE) 
+total$'Returned to the store' <- ifelse(is.na(total$'Returned to the store'), MEEN , total$'Returned to the store')
+par(mfrow = c(1,2))
+hist(total$'Returned to the store', col = "blue")
+boxplot(total$'Returned to the store', col = "blue")
+```
+Figure B.137 - Returned to the store
+
+```{r, echo=FALSE}
+#SummaryStats(Signed, data = total)
+missp <- sum(is.na(total$Signed)/nrow(total)) #5%
+MEEN <- mean(total$Signed, na.rm=TRUE) 
+total$Signed <- ifelse(is.na(total$Signed), MEEN , total$Signed)
+par(mfrow = c(1,2))
+hist(total$Signed, col = "blue")
+boxplot(total$Signed, col = "blue")
+```
+Figure B.138 - Signed
+
+```{r, echo=FALSE}
+#SummaryStats(XNA.x, data = total)
+missp <- sum(is.na(total$XNA.x)/nrow(total)) #5%
+MEEN <- mean(total$XNA.x, na.rm=TRUE) 
+total$XNA.x <- ifelse(is.na(total$XNA.x), MEEN , total$XNA.x)
+par(mfrow = c(1,2))
+hist(total$XNA.x, col = "blue")
+boxplot(total$XNA.x, col = "blue")
+```
+Figure B.139 - XNA
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_ANNUITY_P, data = total)
+missp <- sum(is.na(total$AMT_ANNUITY_P)/nrow(total)) #5%
+MEEN <- mean(total$AMT_ANNUITY_P, na.rm=TRUE) 
+total$AMT_ANNUITY_P <- ifelse(is.na(total$AMT_ANNUITY_P), MEEN , total$AMT_ANNUITY_P)
+par(mfrow = c(1,2))
+hist(total$AMT_ANNUITY_P, col = "blue")
+boxplot(total$AMT_ANNUITY_P, col = "blue")
+```
+Figure B.140 - AMT_ANNUITY_P
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_APPLICATION_P, data = total)
+missp <- sum(is.na(total$AMT_APPLICATION_P)/nrow(total)) #5%
+MEEN <- mean(total$AMT_APPLICATION_P, na.rm=TRUE) 
+total$AMT_APPLICATION_P <- ifelse(is.na(total$AMT_APPLICATION_P), MEEN , total$AMT_APPLICATION_P)
+par(mfrow = c(1,2))
+hist(total$AMT_APPLICATION_P, col = "blue")
+boxplot(total$AMT_APPLICATION_P, col = "blue")
+```
+Figure B.141 - AMT_APPLICATION_P
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_CREDIT_P, data = total)
+missp <- sum(is.na(total$AMT_CREDIT_P)/nrow(total)) #5%
+MEEN <- mean(total$AMT_CREDIT_P, na.rm=TRUE) 
+total$AMT_CREDIT_P <- ifelse(is.na(total$AMT_CREDIT_P), MEEN , total$AMT_CREDIT_P)
+par(mfrow = c(1,2))
+hist(total$AMT_CREDIT_P, col = "blue")
+boxplot(total$AMT_CREDIT_P, col = "blue")
+```
+Figure B.142 - AMT_CREDIT_P
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_DOWN_PAYMENT_P, data = total)
+missp <- sum(is.na(total$AMT_DOWN_PAYMENT_P)/nrow(total)) #10%
+MEEN <- mean(total$AMT_DOWN_PAYMENT_P, na.rm=TRUE) 
+total$AMT_DOWN_PAYMENT_P <- ifelse(is.na(total$AMT_DOWN_PAYMENT_P), MEEN , total$AMT_DOWN_PAYMENT_P)
+par(mfrow = c(1,2))
+hist(total$AMT_DOWN_PAYMENT_P, col = "blue")
+boxplot(total$AMT_DOWN_PAYMENT_P, col = "blue")
+```
+Figure B.143 - AMT_DOWN_PAYMENT_P
+
+```{r, echo=FALSE}
+#SummaryStats(AMT_GOODS_PRICE_P, data = total)
+missp <- sum(is.na(total$AMT_GOODS_PRICE_P)/nrow(total)) #10%
+MEEN <- mean(total$AMT_GOODS_PRICE_P, na.rm=TRUE) 
+total$AMT_GOODS_PRICE_P <- ifelse(is.na(total$AMT_GOODS_PRICE_P), MEEN , total$AMT_GOODS_PRICE_P)
+par(mfrow = c(1,2))
+hist(total$AMT_GOODS_PRICE_P, col = "blue")
+boxplot(total$AMT_GOODS_PRICE_P, col = "blue")
+```
+Figure B.144 - AMT_GOODS_PRICE_P
+
+```{r, echo=FALSE}
+#SummaryStats(NPrevApp, data = total)
+missp <- sum(is.na(total$NPrevApp)/nrow(total)) #5%
+MEEN <- mean(total$NPrevApp, na.rm=TRUE) 
+total$NPrevApp <- ifelse(is.na(total$NPrevApp), MEEN , total$NPrevApp)
+par(mfrow = c(1,2))
+hist(total$NPrevApp, col = "blue")
+boxplot(total$NPrevApp, col = "blue")
+```
+Figure B.145 - NPrevApp
+
+```{r, echo=FALSE}
+#SummaryStats(Approved.y, data = total)
+missp <- sum(is.na(total$Approved.y)/nrow(total)) #5%
+MEEN <- mean(total$Approved.y, na.rm=TRUE) 
+total$Approved.y <- ifelse(is.na(total$Approved.y), MEEN , total$Approved.y)
+par(mfrow = c(1,2))
+hist(total$Approved.y, col = "blue")
+boxplot(total$Approved.y, col = "blue")
+```
+Figure B.146 - Approved.y
+
+```{r, echo=FALSE}
+#SummaryStats(Canceled.y, data = total)
+missp <- sum(is.na(total$Canceled.y)/nrow(total)) #5%
+MEEN <- mean(total$Canceled.y, na.rm=TRUE) 
+total$Canceled.y <- ifelse(is.na(total$Canceled.y), MEEN , total$Canceled.y)
+par(mfrow = c(1,2))
+hist(total$Canceled.y, col = "blue")
+boxplot(total$Canceled.y, col = "blue")
+```
+Figure B.147 - Canceled.y
+
+```{r, echo=FALSE}
+#SummaryStats(Refused, data = total)
+missp <- sum(is.na(total$Refused)/nrow(total)) #5%
+MEEN <- mean(total$Refused, na.rm=TRUE) 
+total$Refused <- ifelse(is.na(total$Refused), MEEN , total$Refused)
+par(mfrow = c(1,2))
+hist(total$Refused, col = "blue")
+boxplot(total$Refused, col = "blue")
+```
+Figure B.148 - Refused
+
+```{r, echo=FALSE}
+#SummaryStats(Unused offer, data = total)
+missp <- sum(is.na(total$'Unused offer')/nrow(total)) #5%
+MEEN <- mean(total$'Unused offer', na.rm=TRUE) 
+total$'Unused offer' <- ifelse(is.na(total$'Unused offer'), MEEN , total$'Unused offer')
+par(mfrow = c(1,2))
+hist(total$'Unused offer', col = "blue")
+boxplot(total$'Unused offer', col = "blue")
+```
+Figure B.149 - Unused offer
+
+```{r, echo=FALSE}
+#SummaryStats(New, data = total)
+missp <- sum(is.na(total$New)/nrow(total)) #5%
+MEEN <- mean(total$New, na.rm=TRUE) 
+total$New <- ifelse(is.na(total$New), MEEN , total$New)
+par(mfrow = c(1,2))
+hist(total$New, col = "blue")
+boxplot(total$New, col = "blue")
+```
+Figure B.150 - New
+
+```{r, echo=FALSE}
+#SummaryStats(Refreshed, data = total)
+missp <- sum(is.na(total$Refreshed)/nrow(total)) #5%
+MEEN <- mean(total$Refreshed, na.rm=TRUE) 
+total$Refreshed <- ifelse(is.na(total$Refreshed), MEEN , total$Refreshed)
+par(mfrow = c(1,2))
+hist(total$Refreshed, col = "blue")
+boxplot(total$Refreshed, col = "blue")
+```
+Figure B.151 - Refreshed
+
+```{r, echo=FALSE}
+#SummaryStats(Repeater, data = total)
+missp <- sum(is.na(total$Repeater)/nrow(total)) #5%
+MEEN <- mean(total$Repeater, na.rm=TRUE) 
+total$Repeater <- ifelse(is.na(total$Repeater), MEEN , total$Repeater)
+par(mfrow = c(1,2))
+hist(total$Repeater, col = "blue")
+boxplot(total$Repeater, col = "blue")
+```
+Figure B.152 - Repeater
+
+```{r, echo=FALSE}
+#SummaryStats(XNA.y, data = total)
+missp <- sum(is.na(total$XNA.y)/nrow(total)) #5%
+MEEN <- mean(total$XNA.y, na.rm=TRUE) 
+total$XNA.y <- ifelse(is.na(total$XNA.y), MEEN , total$XNA.y)
+par(mfrow = c(1,2))
+hist(total$XNA.y, col = "blue")
+boxplot(total$XNA.y, col = "blue")
+```
+Figure B.153 - XNA.y
+
+```{r, include=FALSE}
+EDA_total <- total
+#Normalize variables so they they have zero mean and unit variance. Excluded flag/dummy variables from this.
+total[, c(7,8,9,10,11,17,18,19,20,21,30,
+          31,32,34,92,93,94,95,96,117,118,
+           119,120,121,122:153)] <- scale(total[, c(7,8,9,10,11,17,18,19,20,21,30,
+                                                   31,32,34,92,93,94,95,96,117,118,
+                                                   119,120,121,122:153)])
+
+#Select the predictor varaibles and target variable for modelling 
+total <- total[, c(2,7,8,9,10,11,17,18,19,20,21,22,23,24,25,26,
+                   27,28,30,31,32,34,35,36,37,38,39,40,42,43,44,
+                   45,46,47,48,49,50:86,89,91,92,93,94,95,96,97,
+                   98:116,117,118,119,120,121,122:275)]
+
+#Check number of NA values after data cleaning
+#sum(is.na(total)) -> 48744 -> This is same size test$Target. :-)
+```
+
+```{r}
+#Separate train and test again.
+train <- total %>% filter(!is.na(TARGET))
+test = total %>% filter(is.na(TARGET))
+
+#Training data split into train and test sets.
+#Code segment from Machine Learning With R CookBook)
+split.data = function(data, p = 0.7, s = 111){ 
+  set.seed(s)
+  index = sample(1:dim(data)[1]) 
+  train = data[index[1:floor(dim(data)[1] * p)], ] 
+  test = data[index[((ceiling(dim(data)[1] * p)) + 1):dim(data)[1]], ]
+  return(list(train = train, test = test))}
+
+allset= split.data(train)
+trainset = allset$train
+testset = allset$test
+```
+
+
+```{r}
+#Investigate correlations and multicollinearity
+#Have previously used "corrplot" package to visualise correlation.However with 260 variables the plot is a mess.
+#https://stackoverflow.com/questions/7074246/show-correlations-as-an-ordered-list-not-as-a-large-matrix
+z <- cor(trainset)
+z[lower.tri(z,diag=TRUE)]=NA  #Prepare to drop duplicates and meaningless information
+z=as.data.frame(as.table(z))  #Turn into a 3-column table
+z=na.omit(z)  
+z=z[order(-abs(z$Freq)),]    #Sort by highest correlation (whether +ve or -ve)
+z
+
+#Drop variables that have high correlations with each other. This could cause multicollinearty issues.
+#Obtain column number
+#which(colnames(trainset)=="APARTMENTS_AVG")
+trainset <- trainset[-c(6,12,14,32,33,34,35,36,37,38,39,40,41,44,45,48,52,53,56,57,58,60,61,62,
+                  63,64,65,66,67,68,69,70,71,72,73,74,78,113,114,126,129,130,133,136,137,140,
+                  150,152,153,161,164)]
+testset <- testset[-c(6,12,14,32,33,34,35,36,37,38,39,40,41,44,45,48,52,53,56,57,58,60,61,62,
+                  63,64,65,66,67,68,69,70,71,72,73,74,78,113,114,126,129,130,133,136,137,140,
+                  150,152,153,161,164)]
+z <- cor(trainset)
+z[lower.tri(z,diag=TRUE)]=NA  #Prepare to drop duplicates and meaningless information
+z=as.data.frame(as.table(z))  #Turn into a 3-column table
+z=na.omit(z)  
+z=z[order(-abs(z$Freq)),]    #Sort by highest correlation (whether +ve or -ve)
+z
+```
+
+```{r}
+#Show correlations between predictors and dependant variable.
+z= z %>% filter(Var1=="TARGET")
+z
+
+#Due to computational limitations and time constraints, I decided to drop
+#variables that had less than 0.01 correlation with the target variable.
+a = z %>% filter(abs(Freq) < 0.01)
+a
+index = match(a$Var2, names(trainset))
+trainset <- trainset[-index]
+testset <- testset[-index]
+#dim(trainset) #93 variables remaining
+```
+
+##Appendix 3 Modelling
+
+#Logistic Model
+```{r, include=FALSE}
+library(ROCR)
+library(car)
+library(MASS)
+#Logistic Model
+start.time <- Sys.time()
+logis = glm(TARGET~., data = trainset, family = binomial(link = "logit"))
+summary(logis)
+#Check VIF values to check multicollinearity. Variables with VIF>20 were dropped
+sort(vif(logis))
+logis_prob = predict(logis, testset, type = "response")
+logis_prob_rocr = prediction(logis_prob, testset$TARGET)
+logis_perf = performance(logis_prob_rocr, "tpr", "fpr")
+logis_auc_perf = performance(logis_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(logis_perf, col=2, colorize=T, main=paste("AUC:", logis_auc_perf@y.values))
+logis_auc = as.numeric(unlist(logis_auc_perf@y.values))
+end.time <- Sys.time()
+logis_time.taken <- end.time - start.time
+logis_time.taken
+```
+
+#Gradient Boosted model
+```{r, include=FALSE}
+start.time <- Sys.time()
+#Gradient Boosted model
+library(gbm)
+set.seed(1)
+boost=gbm(TARGET~.,data=trainset,
+          distribution = "bernoulli",
+          n.trees=5000,
+          interaction.depth = 3)
+summary(boost)
+boost_prob = predict(boost, newdata=testset, n.trees=5000, type="response")
+boost_prob_rocr = prediction(boost_prob, testset$TARGET)
+boost_perf = performance(boost_prob_rocr, "tpr", "fpr")
+boost_auc_perf = performance(boost_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(boost_perf, col=2, colorize=T, main=paste("AUC:", boost_auc_perf@y.values))
+boost_auc = as.numeric(unlist(boost_auc_perf@y.values))
+end.time = Sys.time()
+boost_time.taken <- end.time - start.time
+boost_time.taken
+```
+
+#Gradient Boosted Model using Caret for grid search
+```{r, include=FALSE}
+start.time <- Sys.time()
+#Boosted model using Caret for grid search
+library(caret)
+Control <- trainControl(method="repeatedcv", number=5, repeats=5)
+set.seed(1)
+trainset$TARGET <- as.factor(trainset$TARGET)
+boost2 <- train(TARGET ~ EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED +Refused +CODE_GENDER_M +NAME_EDUCATION_TYPE_HE + DAYS_BIRTH + Active + CNT_INSTALMENT +FLAG_DOCUMENT_3 + NAME_EDUCATION_TYPE_SS +AMT_DOWN_PAYMENT_P + MAX_DAYS_CREDIT + NAME_INCOME_TYPE_W + AMT_ANNUITY + FLAG_OWN_CAR_Y + AMT_CREDIT + REG_CITY_NOT_LIVE_CITY + Completed  +  DEF_30_CNT_SOCIAL_CIRCLE + AMT_ANNUITY_P + New + EXT_SOURCE_1 + REGION_RATING_CLIENT_W_CITY + AMT_GOODS_PRICE_P + OCCUPATION_TYPE_LA + ORGANIZATION_TYPE_SL + DEF_60_CNT_SOCIAL_CIRCLE + DAYS_ID_PUBLISH + AMT_APPLICATION_P + NCreditCard + CREDIT_ACTIVE + WALLSMATERIAL_MODE_P + HOUSETYPE_MODE_F + NAME_CONTRACT_TYPE_DMY + ELEVATORS_MODE  + DAYS_LAST_PHONE_CHANGE + APARTMENTS_MODE + NONLIVINGAREA_MODE + REGION_RATING_CLIENT + OCCUPATION_TYPE_D + LIVINGAREA_AVG +  BASEMENTAREA_MODE + DAYS_REGISTRATION + REG_CITY_NOT_WORK_CITY +OCCUPATION_TYPE_CS, data = trainset,
+                method = "gbm", trControl = Control, verbose = FALSE, tuneLength=5)
+summary(boost2)
+boost2
+boost2_prob = predict(boost2, newdata=testset, n.trees=5000, type="prob")[,2]
+boost2_prob_rocr = prediction(boost2_prob, testset$TARGET)
+boost2_perf = performance(boost2_prob_rocr, "tpr", "fpr")
+boost2_auc_perf = performance(boost2_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(boost2_perf, col=2, colorize=T, main=paste("AUC:", boost2_auc_perf@y.values))
+boost2_auc = as.numeric(unlist(boost2_auc_perf@y.values))
+end.time = Sys.time()
+boost2_time.taken <- end.time - start.time
+boost2_time.taken
+```
+
+#Logistic Model with Backward Selection
+```{r, include=FALSE}
+#Logistic Model with Backward Selection
+start.time <- Sys.time()
+backward.lm <- list()
+upper.lm <- glm(TARGET ~ ., family = binomial, data=trainset); 
+backward <- stepAIC(object=upper.lm,direction=c('backward')); 
+summary(backward)
+sort(vif(backward))
+backward_prob = predict(backward, testset, type = "response")
+backward_prob_rocr = prediction(backward_prob, testset$TARGET)
+backward_perf = performance(backward_prob_rocr, "tpr", "fpr")
+backward_auc_perf = performance(backward_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(backward_perf, col=2, colorize=T, main=paste("AUC:", backward_auc_perf@y.values))
+backward_auc = as.numeric(unlist(backward_auc_perf@y.values))
+end.time = Sys.time()
+backward_time.taken <- end.time - start.time
+backward_time.taken
+```
+
+#Logistic Model with Forward Selection
+```{r}
+start.time <- Sys.time()
+forward.lm <- list()
+lower.lm <- glm(TARGET ~ 1, family = binomial, data=trainset); 
+forward <- stepAIC(object=lower.lm,scope=list(upper=formula(upper.lm),lower=~1), direction = c ('forward'));
+forward_prob = predict(forward, testset, type = "response")
+forward_prob_rocr = prediction(forward_prob, testset$TARGET)
+forward_perf = performance(forward_prob_rocr, "tpr", "fpr")
+forward_auc_perf = performance(forward_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(forward_perf, col=2, colorize=T, main=paste("AUC:", forward_auc_perf@y.values))
+forward_auc = as.numeric(unlist(forward_auc_perf@y.values))
+end.time = Sys.time()
+forward_time.taken <- end.time - start.time
+forward_time.taken
+```
+
+#LDA Model
+```{r, include=FALSE}
+start.time <- Sys.time()
+lda1 = lda(TARGET~EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED +Refused +CODE_GENDER_M +NAME_EDUCATION_TYPE_HE + DAYS_BIRTH + Active + CNT_INSTALMENT +FLAG_DOCUMENT_3 + NAME_EDUCATION_TYPE_SS +AMT_DOWN_PAYMENT_P + MAX_DAYS_CREDIT + NAME_INCOME_TYPE_W + AMT_ANNUITY + FLAG_OWN_CAR_Y + AMT_CREDIT + REG_CITY_NOT_LIVE_CITY + Completed  +  DEF_30_CNT_SOCIAL_CIRCLE + AMT_ANNUITY_P + New + EXT_SOURCE_1 + REGION_RATING_CLIENT_W_CITY + AMT_GOODS_PRICE_P + OCCUPATION_TYPE_LA + ORGANIZATION_TYPE_SL + DEF_60_CNT_SOCIAL_CIRCLE + DAYS_ID_PUBLISH + AMT_APPLICATION_P + NCreditCard + CREDIT_ACTIVE + WALLSMATERIAL_MODE_P + HOUSETYPE_MODE_F + NAME_CONTRACT_TYPE_DMY + ELEVATORS_MODE  + DAYS_LAST_PHONE_CHANGE + APARTMENTS_MODE + NONLIVINGAREA_MODE + REGION_RATING_CLIENT + OCCUPATION_TYPE_D + LIVINGAREA_AVG +  BASEMENTAREA_MODE + DAYS_REGISTRATION + REG_CITY_NOT_WORK_CITY +OCCUPATION_TYPE_CS, data = trainset)
+summary(lda1)
+lda1_prob = predict(lda1, testset)$posterior[,2]
+lda1_prob_rocr = prediction(lda1_prob, testset$TARGET)
+lda1_perf = performance(lda1_prob_rocr, "tpr", "fpr")
+lda1_auc_perf = performance(lda1_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(lda1_perf, col=2, colorize=T, main=paste("AUC:", lda1_auc_perf@y.values))
+lda1_auc = as.numeric(unlist(lda1_auc_perf@y.values))
+end.time = Sys.time()
+lda1_time.taken <- end.time - start.time
+lda1_time.taken
+```
+
+#QDA Model
+```{r, include=FALSE}
+start.time <- Sys.time()
+library(MASS)
+#QDA Model
+qda1 = qda(TARGET~EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED +Refused +CODE_GENDER_M +NAME_EDUCATION_TYPE_HE + DAYS_BIRTH + Active + CNT_INSTALMENT +FLAG_DOCUMENT_3 + NAME_EDUCATION_TYPE_SS +AMT_DOWN_PAYMENT_P + MAX_DAYS_CREDIT + NAME_INCOME_TYPE_W + AMT_ANNUITY + FLAG_OWN_CAR_Y + AMT_CREDIT + REG_CITY_NOT_LIVE_CITY + Completed  +  DEF_30_CNT_SOCIAL_CIRCLE + AMT_ANNUITY_P + New + EXT_SOURCE_1 + REGION_RATING_CLIENT_W_CITY + AMT_GOODS_PRICE_P + OCCUPATION_TYPE_LA + ORGANIZATION_TYPE_SL + DEF_60_CNT_SOCIAL_CIRCLE + DAYS_ID_PUBLISH + AMT_APPLICATION_P + NCreditCard + CREDIT_ACTIVE + WALLSMATERIAL_MODE_P + HOUSETYPE_MODE_F + NAME_CONTRACT_TYPE_DMY + ELEVATORS_MODE  + DAYS_LAST_PHONE_CHANGE + APARTMENTS_MODE + NONLIVINGAREA_MODE + REGION_RATING_CLIENT + OCCUPATION_TYPE_D + LIVINGAREA_AVG +  BASEMENTAREA_MODE + DAYS_REGISTRATION + REG_CITY_NOT_WORK_CITY +OCCUPATION_TYPE_CS, data = trainset)
+summary(qda1)
+qda1_prob = predict(qda1, testset)$posterior[,2]
+qda1_prob_rocr = prediction(qda1_prob, testset$TARGET)
+qda1_perf = performance(qda1_prob_rocr, "tpr", "fpr")
+qda1_auc_perf = performance(qda1_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(qda1_perf, col=2, colorize=T, main=paste("AUC:", qda1_auc_perf@y.values))
+qda1_auc = as.numeric(unlist(qda1_auc_perf@y.values))
+end.time = Sys.time()
+qda1_time.taken <- end.time - start.time
+qda1_time.taken
+```
+
+#LASSO
+```{r, include=FALSE}
+#Lasso
+#https://www4.stat.ncsu.edu/~reich/BigData/code/glmnet.html
+start.time <- Sys.time()
+library(glmnet)
+X <- data.matrix(as.data.frame(trainset[,-c(1)]))
+X2<- data.matrix(as.data.frame(testset[,-c(1)]))
+Y <- data.matrix(as.data.frame(trainset[,1]))
+Y2 <-data.matrix(as.data.frame(testset[,1]))
+alpha  <- 1.0
+cv <- cv.glmnet(X, Y, family = "binomial", alpha=alpha)
+plot(cv$lambda, cv$cvm)
+lambda <- cv$lambda.min
+lasso <- glmnet(X, Y, family = "binomial", alpha=alpha)
+summary(lasso)
+best <- which.min(abs(lasso$lambda-lambda))
+lasso_prob <- predict(lasso,newx=X2, type="response")[,best]
+boxplot(lasso_prob~Y2,xlab="Y_p",ylab="p_hat",main="LASSO")
+lasso_prob_rocr = prediction(lasso_prob, testset$TARGET)
+lasso_perf = performance(lasso_prob_rocr, "tpr", "fpr")
+lasso_auc_perf = performance(lasso_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(lasso_perf, col=2, colorize=T, main=paste("AUC:", lasso_auc_perf@y.values))
+lasso_auc = as.numeric(unlist(lasso_auc_perf@y.values))
+end.time = Sys.time()
+lasso_time.taken <- end.time - start.time
+lasso_time.taken
+```
+
+#RIDGE
+```{r, include=FALSE}
+start.time <- Sys.time()
+#Ridge Regression
+library(glmnet)
+alpha  <- 0
+cv <- cv.glmnet(X, Y, family = "binomial", alpha=alpha)
+plot(cv$lambda, cv$cvm)
+lambda <- cv$lambda.min
+lambda
+ridge <- glmnet(X, Y, family = "binomial", alpha=alpha)
+best <- which.min(abs(ridge$lambda-lambda))
+ridge_prob <- predict(ridge,newx=X2,type="response")[,best]
+summary(ridge)
+boxplot(ridge_prob~Y2,xlab="Y_p",ylab="p_hat",main="ridge")
+ridge_prob_rocr = prediction(ridge_prob, testset$TARGET)
+ridge_perf = performance(ridge_prob_rocr, "tpr", "fpr")
+ridge_auc_perf = performance(ridge_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(ridge_perf, col=2, colorize=T, main=paste("AUC:", ridge_auc_perf@y.values))
+ridge_auc = as.numeric(unlist(ridge_auc_perf@y.values))
+end.time = Sys.time()
+ridge_time.taken <- end.time - start.time
+ridge_time.taken
+```
+
+#SVM
+```{r, include=FALSE}
+start.time <- Sys.time()
+library(e1071)
+trainset$TARGET<- factor(trainset$TARGET)
+#Use tune function to iterate through a range of cost and gamma functions.
+svm1 <- tune(svm, TARGET ~ EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED +Refused +CODE_GENDER_M +NAME_EDUCATION_TYPE_HE + DAYS_BIRTH + Active + CNT_INSTALMENT +FLAG_DOCUMENT_3 + NAME_EDUCATION_TYPE_SS +AMT_DOWN_PAYMENT_P + MAX_DAYS_CREDIT + NAME_INCOME_TYPE_W + AMT_ANNUITY + FLAG_OWN_CAR_Y + AMT_CREDIT + REG_CITY_NOT_LIVE_CITY + Completed  +  DEF_30_CNT_SOCIAL_CIRCLE + AMT_ANNUITY_P + New + EXT_SOURCE_1 + REGION_RATING_CLIENT_W_CITY + AMT_GOODS_PRICE_P + OCCUPATION_TYPE_LA + ORGANIZATION_TYPE_SL + DEF_60_CNT_SOCIAL_CIRCLE + DAYS_ID_PUBLISH + AMT_APPLICATION_P + NCreditCard + CREDIT_ACTIVE + WALLSMATERIAL_MODE_P + HOUSETYPE_MODE_F + NAME_CONTRACT_TYPE_DMY + ELEVATORS_MODE  + DAYS_LAST_PHONE_CHANGE + APARTMENTS_MODE + NONLIVINGAREA_MODE + REGION_RATING_CLIENT + OCCUPATION_TYPE_D + LIVINGAREA_AVG +  BASEMENTAREA_MODE + DAYS_REGISTRATION + REG_CITY_NOT_WORK_CITY +OCCUPATION_TYPE_CS, data=trainset, kernel="radial", ranges=list(cost=c(0.1,1,10,1000), gamma=c(0.5,1,2,3,4)))
+
+#svm1 <- svm(TARGET~ EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED +Refused +CODE_GENDER_M +NAME_EDUCATION_TYPE_HE + DAYS_BIRTH + Active + CNT_INSTALMENT +FLAG_DOCUMENT_3 + NAME_EDUCATION_TYPE_SS +AMT_DOWN_PAYMENT_P + MAX_DAYS_CREDIT + NAME_INCOME_TYPE_W + AMT_ANNUITY + FLAG_OWN_CAR_Y + AMT_CREDIT + REG_CITY_NOT_LIVE_CITY + Completed  +  DEF_30_CNT_SOCIAL_CIRCLE + AMT_ANNUITY_P + New + EXT_SOURCE_1 + REGION_RATING_CLIENT_W_CITY + AMT_GOODS_PRICE_P + OCCUPATION_TYPE_LA + ORGANIZATION_TYPE_SL + DEF_60_CNT_SOCIAL_CIRCLE + DAYS_ID_PUBLISH + AMT_APPLICATION_P + NCreditCard + CREDIT_ACTIVE + WALLSMATERIAL_MODE_P + HOUSETYPE_MODE_F + NAME_CONTRACT_TYPE_DMY + ELEVATORS_MODE  + DAYS_LAST_PHONE_CHANGE + APARTMENTS_MODE + NONLIVINGAREA_MODE + REGION_RATING_CLIENT + OCCUPATION_TYPE_D + LIVINGAREA_AVG +  BASEMENTAREA_MODE + DAYS_REGISTRATION + REG_CITY_NOT_WORK_CITY +OCCUPATION_TYPE_CS, data = trainset,kernel="radial", cost = 1, gamma= 0.5, probability=TRUE)
+svm1
+svm1_prob <- predict(svm1, testset, probability=TRUE)
+svm1_prob <- attr(svm1_prob, "probabilities")[,1]
+library(ROCR)
+svm1_prob_rocr = prediction(svm1_prob, testset$TARGET)
+svm1_perf = performance(svm1_prob_rocr, "tpr", "fpr")
+svm1_auc_perf = performance(svm1_prob_rocr, measure = "auc", x.measure = "cutoff")
+plot(svm1_perf, col=2, colorize=T, main=paste("AUC:", svm1_auc_perf@y.values))
+svm1_auc = as.numeric(unlist(svm1_auc_perf@y.values))
+end.time = Sys.time()
+svm1_time.taken <- end.time - start.time
+svm1_time.taken
+```
+
+#Neural Net
+```{r, include=FALSE}
+#Neural Network
+#start.time <- Sys.time()
+#library(neuralnet)
+#trainset$TARGET = ifelse(trainset$TARGET==1, TRUE, FALSE)
+#testset$TARGET = ifelse(testset$TARGET==1, TRUE, FALSE)
+#set.seed(123)
+#nn <- neuralnet(TARGET~EXT_SOURCE_2 + EXT_SOURCE_3 + DAYS_EMPLOYED +Refused +CODE_GENDER_M +NAME_EDUCATION_TYPE_HE + DAYS_BIRTH + Active + CNT_INSTALMENT +FLAG_DOCUMENT_3 + NAME_EDUCATION_TYPE_SS +AMT_DOWN_PAYMENT_P + MAX_DAYS_CREDIT + NAME_INCOME_TYPE_W + AMT_ANNUITY + FLAG_OWN_CAR_Y + AMT_CREDIT + REG_CITY_NOT_LIVE_CITY + Completed  +  DEF_30_CNT_SOCIAL_CIRCLE + AMT_ANNUITY_P + New + EXT_SOURCE_1 + REGION_RATING_CLIENT_W_CITY + AMT_GOODS_PRICE_P + OCCUPATION_TYPE_LA + ORGANIZATION_TYPE_SL + DEF_60_CNT_SOCIAL_CIRCLE + DAYS_ID_PUBLISH + AMT_APPLICATION_P + NCreditCard + CREDIT_ACTIVE + WALLSMATERIAL_MODE_P + HOUSETYPE_MODE_F + NAME_CONTRACT_TYPE_DMY + ELEVATORS_MODE  + DAYS_LAST_PHONE_CHANGE + APARTMENTS_MODE + NONLIVINGAREA_MODE + REGION_RATING_CLIENT + OCCUPATION_TYPE_D + LIVINGAREA_AVG +  BASEMENTAREA_MODE + DAYS_REGISTRATION + REG_CITY_NOT_WORK_CITY +OCCUPATION_TYPE_CS, trainset,linear.output=FALSE, hidden=2)
+#plot(nn)
+#nn_prob = compute(nn, testset[,c("EXT_SOURCE_2", "EXT_SOURCE_3", "DAYS_EMPLOYED", "Refused","CODE_GENDER_M", "NAME_EDUCATION_TYPE_HE","DAYS_BIRTH", "Active", "CNT_INSTALMENT", "FLAG_DOCUMENT_3", "NAME_EDUCATION_TYPE_SS", "AMT_DOWN_PAYMENT_P", "MAX_DAYS_CREDIT", "NAME_INCOME_TYPE_W", "AMT_ANNUITY","FLAG_OWN_CAR_Y", "AMT_CREDIT", "REG_CITY_NOT_LIVE_CITY", "Completed", "DEF_30_CNT_SOCIAL_CIRCLE","AMT_ANNUITY_P", "New", "EXT_SOURCE_1", "REGION_RATING_CLIENT_W_CITY", "AMT_GOODS_PRICE_P", "OCCUPATION_TYPE_LA", "ORGANIZATION_TYPE_SL", "DEF_60_CNT_SOCIAL_CIRCLE", "DAYS_ID_PUBLISH", "AMT_APPLICATION_P", "NCreditCard","CREDIT_ACTIVE", "WALLSMATERIAL_MODE_P", "HOUSETYPE_MODE_F", "NAME_CONTRACT_TYPE_DMY", "ELEVATORS_MODE","DAYS_LAST_PHONE_CHANGE", "APARTMENTS_MODE", "NONLIVINGAREA_MODE", "REGION_RATING_CLIENT","OCCUPATION_TYPE_D","LIVINGAREA_AVG", "BASEMENTAREA_MODE", "DAYS_REGISTRATION","REG_CITY_NOT_WORK_CITY", "OCCUPATION_TYPE_CS")])      
+#nn_prob = nn_prob$net.result[,1]
+#detach(package:neuralnet) 
+#library(ROCR)
+#nn_prob_rocr = prediction(nn_prob, testset$TARGET)
+#nn_perf = performance(nn_prob_rocr, "tpr", "fpr")
+#nn_auc_perf = performance(nn_prob_rocr, measure = "auc", x.measure = "cutoff")
+#plot(nn_perf, col=2, colorize=T, main=paste("AUC:", nn_auc_perf@y.values))
+#nn_auc = as.numeric(unlist(nn_auc_perf@y.values))
+#end.time = Sys.time()
+#nn_time.taken <- end.time - start.time
+#nn_time.taken
+```
+
+#AUC Plot
+```{r, include=FALSE}
+#AUC PLOT
+plot(logis_perf)
+plot(forward_perf, col=2, add=TRUE)
+plot(backward_perf, col=3, add=TRUE)
+plot(boost_perf, col=4, add=TRUE)
+plot(boost2_perf, col=5, add=TRUE)
+plot(lda1_perf, col=6, add=TRUE)
+plot(qda1_perf, col=7, add=TRUE)
+plot(lasso_perf, col=8, add=TRUE)
+plot(ridge_perf, col=9, add=TRUE)
+#plot(svm1_perf, col=10, add=TRUE)
+n1<-paste("Full Logistic (AUC = ", round(logis_auc,3), ")", sep="")
+n2<-paste("Forward Logistic (AUC = ", round(forward_auc,3), ")", sep="")
+n3<-paste("Backward Logistic (AUC = ", round(backward_auc,3), ")", sep="")
+n4<-paste("GBM (AUC = ", round(boost_auc,3), ")", sep="")
+n5<-paste("Tuned GBM (AUC = ", round(boost2_auc,3), ")", sep="")
+n6<-paste("LDA (AUC = ", round(lda1_auc,3), ")", sep="")
+n7<-paste("QDA (AUC = ", round(qda1_auc,3), ")", sep="")
+n8<-paste("Lasso (AUC = ", round(lasso_auc,3), ")", sep="")
+n9<-paste("Ridge (AUC = ", round(ridge_auc,3), ")", sep="")
+#n10<-paste("SVM (AUC = ", round(svm1_auc,3), ")", sep="")
+
+legend("bottomright",c(n1,n2,n3,n4,n5,n6,n7,n8,n9),lty=1,col=1:9,inset=0.05)
+```
+
+
+Final Submission
+```{r, include=FALSE}
+#####################################################################################
+#Create final csv for submission
+#####################################################################################
+TARGET <- predict(logis, test, type = "response")
+mydata <- cbind.data.frame(mydata, TARGET)
+names(mydata)[1]<-"SK_ID_CURR"
+
+#Output mydata dataframe into CSV file.
+path.name <- 'C:/Users/mkdob/OneDrive/Northwestern/454 AMT/Kaggle/P1_Credit/';
+file.name <- paste(path.name,'mkd_predicted.csv', sep='');
+write.csv(mydata, file = file.name, row.names=FALSE)
+```
+
+
+
+
