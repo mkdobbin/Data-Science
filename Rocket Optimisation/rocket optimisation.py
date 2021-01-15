@@ -1,12 +1,7 @@
 """
-Created on Sat Aug 13 12:54:59 2011
-rk4.py
-
 rokit.py is used to model, predict and optimise 
 the flight of a bottle rocket filled with water
-and pressurised with air. First assignment MECH3750
-
-@author: mkdobbin
+and pressurised with air. 
 """
 
 
