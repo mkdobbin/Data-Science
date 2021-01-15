@@ -307,7 +307,7 @@ def flight(rangled):
 
 def maximize(f, a, b, tolerance):
     """
-    Code from 2700 demo code for finding a minimum using golden search. 
+    Finding a minimum using golden search. 
     
     Returns the bracket xL,xR containing the minimum of the function f.
     However we are searching for a maximum so by feeding in -f(fuel) the 
@@ -344,8 +344,6 @@ def maximize(f, a, b, tolerance):
 
 def shooting(beta, g0 ,g1):
     """
-    Code based on MECH3750 shooting.py shown in lectures.
-    
     Shooting method, takes in beta value for x(1), i.e the distance
     that wants to be achieved along with two intial guesses g0 and g1.
     Shooting returns the volume of fuel that should be used to achieve this
@@ -411,7 +409,7 @@ if __name__ == '__main__':
     """ 
     loop finds the maximum max distance stored in the xdist array and 
     finds its position in the array. It then stores the corrosponding 
-    fuel volume and rample angle that gave that distance
+    fuel volume and ramp angle that gave that distance
     """   
     maxdist = 0   
     n = len(xdist)     # the number of elments in xi array 
