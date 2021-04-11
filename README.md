@@ -2,7 +2,7 @@
 Master of Science Data Science
 Part Time Online 2016 - 2019
 
-This repository contains course work and projects completed during University. Key projects are listed below.
+This repository contains course work and projects completed during my Masters degree at Northwestern University. Key projects are listed below.
 
 ## Northwestern/Machine Learning/Predicting Credit Default/
 Capstone Project: Predicting the probability of default payments for credit card clients. Report details exploratory data analysis, feature engineering and predictive modelling. Implemented and compared results of different models including gradient boosted, logistic regression and support vector machine. Coding in R. 
